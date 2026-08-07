@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouTube Thumbnail Picker</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --card: #171a21;
+      --border: #2a2f3a;
+      --text: #e8eaed;
+      --muted: #9aa3b2;
+      --accent: #6ee7b7;
+      --accent-2: #f87171;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      padding: 48px 20px;
+    }
+    .wrap { width: 100%; max-width: 720px; }
+    h1 {
+      font-size: 1.6rem;
+      margin: 0 0 6px;
+    }
+    p.sub {
+      color: var(--muted);
+      margin: 0 0 28px;
+      font-size: 0.95rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    form { display: flex; gap: 10px; flex-wrap: wrap; }
+    input[type="url"] {
+      flex: 1 1 280px;
+      background: #0c0e12;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 0.95rem;
+    }
+    input[type="url"]:focus { outline: 2px solid var(--accent); }
+    button {
+      background: var(--accent);
+      color: #05130d;
+      border: none;
+      font-weight: 600;
+      padding: 12px 20px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    #status {
+      display: none;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .error {
+      border-color: var(--accent-2);
+      color: #fecaca;
+    }
+    .thumb-img {
+      width: 100%;
+      border-radius: 10px;
+      display: block;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+    }
+    .meta { font-size: 0.9rem; color: var(--muted); line-height: 1.6; }
+    .meta b { color: var(--text); }
+    .download {
+      display: inline-block;
+      margin-top: 14px;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>YouTube Thumbnail Picker</h1>
+    <p class="sub">Paste a link. Gemini looks at candidate frames, picks the best one, and writes a caption.</p>
+
+    <div class="card">
+      <form id="generate-form" method="post" action="/generate">
+        <input type="url" name="youtube_url" placeholder="https://youtu.be/..." required
+               value="{{ youtube_url or '' }}">
+        <button type="submit" id="submit-btn">Generate Thumbnail</button>
+      </form>
+      <div id="status">Downloading, sampling frames, and asking Gemini to design your thumbnail — this usually takes 30-90 seconds...</div>
+    </div>
+
+    {% if error %}
+    <div class="card error">
+      <b>Something went wrong:</b>
+      <div class="meta">{{ error }}</div>
+    </div>
+    {% endif %}
+
+    {% if result %}
+    <div class="card">
+      <img class="thumb-img" src="{{ result.image_url }}" alt="Generated thumbnail">
+      <div class="meta">
+        <div><b>Title:</b> {{ result.title }}</div>
+        <div><b>Caption:</b> "{{ result.caption }}"</div>
+        <div><b>Chosen frame:</b> t={{ result.timestamp }}s — {{ result.reason }}</div>
+        {% if result.transcribed %}<div>Caption informed by audio transcription (OpenAI Whisper).</div>{% endif %}
+      </div>
+      <a class="download" href="{{ result.image_url }}" download>Download thumbnail.jpg</a>
+    </div>
+    {% endif %}
+  </div>
+
+  <script>
+    document.getElementById("generate-form").addEventListener("submit", function () {
+      document.getElementById("submit-btn").disabled = true;
+      document.getElementById("submit-btn").textContent = "Working...";
+      document.getElementById("status").style.display = "block";
+    });
+  </script>
+</body>
+</html>

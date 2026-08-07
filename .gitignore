@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets — GEMINI_API_KEY / OPENAI_API_KEY are read from the environment,
+# never commit a dotenv that carries them.
+.env
+.env.*
+!.env.example
+
+# Pipeline scratch: downloaded videos + sampled frames. 116 MB and regenerable.
+work/
+
+# Generated thumbnails
+static/outputs/
+thumbnail.jpg
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
