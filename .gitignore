@@ -6,13 +6,13 @@ __pycache__/
 venv/
 env/
 
-# Secrets — GEMINI_API_KEY / OPENAI_API_KEY are read from the environment,
+# Secrets — KIE_API_KEY / OPENAI_API_KEY are read from the environment,
 # never commit a dotenv that carries them.
 .env
 .env.*
 !.env.example
 
-# Pipeline scratch: downloaded videos + sampled frames. 116 MB and regenerable.
+# Pipeline scratch: downloaded/uploaded videos, sampled frames, renders. Regenerable.
 work/
 
 # Generated thumbnails

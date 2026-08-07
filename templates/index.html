@@ -3,17 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>YouTube Thumbnail Picker</title>
+  <title>Thumbsmith — AI YouTube Thumbnails</title>
   <style>
     :root {
       color-scheme: dark;
       --bg: #0f1115;
       --card: #171a21;
+      --card-2: #0c0e12;
       --border: #2a2f3a;
       --text: #e8eaed;
       --muted: #9aa3b2;
       --accent: #6ee7b7;
-      --accent-2: #f87171;
+      --danger: #f87171;
+      --warn: #fbbf24;
       --radius: 14px;
     }
     * { box-sizing: border-box; }
@@ -27,16 +29,9 @@
       justify-content: center;
       padding: 48px 20px;
     }
-    .wrap { width: 100%; max-width: 720px; }
-    h1 {
-      font-size: 1.6rem;
-      margin: 0 0 6px;
-    }
-    p.sub {
-      color: var(--muted);
-      margin: 0 0 28px;
-      font-size: 0.95rem;
-    }
+    .wrap { width: 100%; max-width: 760px; }
+    h1 { font-size: 1.6rem; margin: 0 0 6px; }
+    p.sub { color: var(--muted); margin: 0 0 28px; font-size: 0.95rem; }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -44,18 +39,51 @@
       padding: 24px;
       margin-bottom: 20px;
     }
-    form { display: flex; gap: 10px; flex-wrap: wrap; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+    .tab {
+      flex: 1;
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 10px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      font-family: inherit;
+    }
+    .tab[aria-selected="true"] { color: var(--text); border-color: var(--accent); background: #10241c; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
     input[type="url"] {
       flex: 1 1 280px;
-      background: #0c0e12;
+      background: var(--card-2);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 12px 14px;
       border-radius: 10px;
       font-size: 0.95rem;
+      font-family: inherit;
     }
     input[type="url"]:focus { outline: 2px solid var(--accent); }
-    button {
+    .drop {
+      display: block;
+      border: 1.5px dashed var(--border);
+      border-radius: 10px;
+      padding: 26px 18px;
+      text-align: center;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.92rem;
+      margin-bottom: 12px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop:hover, .drop.hover { border-color: var(--accent); background: #10241c; }
+    .drop b { color: var(--text); display: block; margin-bottom: 4px; font-size: 0.98rem; }
+    .drop input { display: none; }
+    #file-name { color: var(--accent); }
+    button.go {
       background: var(--accent);
       color: #05130d;
       border: none;
@@ -64,19 +92,12 @@
       border-radius: 10px;
       cursor: pointer;
       font-size: 0.95rem;
+      font-family: inherit;
     }
-    button:hover { filter: brightness(1.05); }
-    button:disabled { opacity: 0.6; cursor: wait; }
-    #status {
-      display: none;
-      margin-top: 14px;
-      color: var(--muted);
-      font-size: 0.9rem;
-    }
-    .error {
-      border-color: var(--accent-2);
-      color: #fecaca;
-    }
+    button.go:hover { filter: brightness(1.05); }
+    button.go:disabled { opacity: 0.6; cursor: wait; }
+    #status { display: none; margin-top: 14px; color: var(--muted); font-size: 0.9rem; }
+    .error { border-color: var(--danger); color: #fecaca; }
     .thumb-img {
       width: 100%;
       border-radius: 10px;
@@ -84,8 +105,19 @@
       margin-bottom: 14px;
       border: 1px solid var(--border);
     }
-    .meta { font-size: 0.9rem; color: var(--muted); line-height: 1.6; }
+    .meta { font-size: 0.9rem; color: var(--muted); line-height: 1.7; }
     .meta b { color: var(--text); }
+    .pill {
+      display: inline-block;
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin: 0 6px 6px 0;
+    }
+    .note { color: var(--warn); font-size: 0.85rem; margin-top: 10px; line-height: 1.5; }
     .download {
       display: inline-block;
       margin-top: 14px;
@@ -94,20 +126,50 @@
       font-weight: 600;
       font-size: 0.9rem;
     }
+    .hint { color: var(--muted); font-size: 0.82rem; margin-top: 10px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>YouTube Thumbnail Picker</h1>
-    <p class="sub">Paste a link. Gemini looks at candidate frames, picks the best one, and writes a caption.</p>
+    <h1>Thumbsmith</h1>
+    <p class="sub">
+      Give it a video. It shortlists the strongest frames, art-directs one on kie.ai, re-renders it
+      with GPT Image&nbsp;2, and lays a headline where it will actually be read.
+    </p>
 
     <div class="card">
-      <form id="generate-form" method="post" action="/generate">
-        <input type="url" name="youtube_url" placeholder="https://youtu.be/..." required
-               value="{{ youtube_url or '' }}">
-        <button type="submit" id="submit-btn">Generate Thumbnail</button>
+      <form id="generate-form" method="post" action="/generate" enctype="multipart/form-data">
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab" role="tab" data-panel="link"
+                  aria-selected="{{ 'false' if active_tab == 'upload' else 'true' }}">Paste a link</button>
+          <button type="button" class="tab" role="tab" data-panel="upload"
+                  aria-selected="{{ 'true' if active_tab == 'upload' else 'false' }}">Upload a video</button>
+        </div>
+
+        <div class="panel {{ '' if active_tab == 'upload' else 'active' }}" id="panel-link">
+          <div class="row">
+            <input type="url" name="youtube_url" placeholder="https://youtu.be/..."
+                   value="{{ youtube_url or '' }}">
+            <button type="submit" class="go">Generate Thumbnail</button>
+          </div>
+        </div>
+
+        <div class="panel {{ 'active' if active_tab == 'upload' else '' }}" id="panel-upload">
+          <label class="drop" id="drop-zone">
+            <b id="file-label">Choose a video file or drop it here</b>
+            <span id="file-name">{{ allowed_extensions }} — up to {{ max_upload_mb }} MB</span>
+            <input type="file" name="video_file" id="video-file" accept="video/*">
+          </label>
+          <div class="row">
+            <button type="submit" class="go">Generate Thumbnail</button>
+          </div>
+          <div class="hint">The file is processed locally; only the shortlisted frames are sent to kie.ai.</div>
+        </div>
+
+        <div id="status">
+          Working — sampling frames, art-directing, and rendering. This usually takes 1-3 minutes...
+        </div>
       </form>
-      <div id="status">Downloading, sampling frames, and asking Gemini to design your thumbnail — this usually takes 30-90 seconds...</div>
     </div>
 
     {% if error %}
@@ -120,21 +182,78 @@
     {% if result %}
     <div class="card">
       <img class="thumb-img" src="{{ result.image_url }}" alt="Generated thumbnail">
-      <div class="meta">
-        <div><b>Title:</b> {{ result.title }}</div>
-        <div><b>Caption:</b> "{{ result.caption }}"</div>
-        <div><b>Chosen frame:</b> t={{ result.timestamp }}s — {{ result.reason }}</div>
-        {% if result.transcribed %}<div>Caption informed by audio transcription (OpenAI Whisper).</div>{% endif %}
+      <div>
+        <span class="pill">{{ 'rendered by ' + result.image_model if result.rendered else 'original frame' }}</span>
+        <span class="pill">directed by {{ result.chat_model }}</span>
+        <span class="pill">headline on the {{ result.text_side }}</span>
+        {% if result.transcribed %}<span class="pill">speech-aware headline</span>{% endif %}
+        <span class="pill">{{ 'uploaded file' if result.origin == 'upload' else 'youtube link' }}</span>
       </div>
-      <a class="download" href="{{ result.image_url }}" download>Download thumbnail.jpg</a>
+      <div class="meta">
+        <div><b>Source:</b> {{ result.title }}</div>
+        <div><b>Headline:</b> "{{ result.headline }}"</div>
+        <div><b>Chosen frame:</b> t={{ result.timestamp }}s — {{ result.reason }}</div>
+      </div>
+      {% for warning in result.warnings %}
+      <div class="note">{{ warning }}</div>
+      {% endfor %}
+      <a class="download" href="{{ result.image_url }}" download="thumbnail.jpg">Download thumbnail.jpg</a>
     </div>
     {% endif %}
   </div>
 
   <script>
+    const tabs = document.querySelectorAll(".tab");
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        tabs.forEach(function (t) {
+          const selected = t === tab;
+          t.setAttribute("aria-selected", String(selected));
+          document.getElementById("panel-" + t.dataset.panel).classList.toggle("active", selected);
+        });
+      });
+    });
+
+    const fileInput = document.getElementById("video-file");
+    const dropZone = document.getElementById("drop-zone");
+    const fileName = document.getElementById("file-name");
+    const fileLabel = document.getElementById("file-label");
+
+    function showFile(file) {
+      if (!file) return;
+      fileLabel.textContent = "Ready to generate";
+      fileName.textContent = file.name + " (" + (file.size / 1048576).toFixed(1) + " MB)";
+    }
+
+    fileInput.addEventListener("change", function () { showFile(fileInput.files[0]); });
+
+    ["dragenter", "dragover"].forEach(function (evt) {
+      dropZone.addEventListener(evt, function (e) { e.preventDefault(); dropZone.classList.add("hover"); });
+    });
+    ["dragleave", "drop"].forEach(function (evt) {
+      dropZone.addEventListener(evt, function (e) { e.preventDefault(); dropZone.classList.remove("hover"); });
+    });
+    dropZone.addEventListener("drop", function (e) {
+      if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        showFile(fileInput.files[0]);
+      }
+    });
+
     document.getElementById("generate-form").addEventListener("submit", function () {
-      document.getElementById("submit-btn").disabled = true;
-      document.getElementById("submit-btn").textContent = "Working...";
+      // Both fields live in the same form, so a stale value on the hidden tab would be
+      // submitted too. Only the visible tab's input should count.
+      const uploadActive = document.getElementById("panel-upload").classList.contains("active");
+      if (uploadActive) {
+        document.querySelector('input[name="youtube_url"]').value = "";
+      } else {
+        fileInput.value = "";
+      }
+
+      document.querySelectorAll("button.go").forEach(function (b) {
+        b.disabled = true;
+        b.textContent = "Working...";
+      });
       document.getElementById("status").style.display = "block";
     });
   </script>

@@ -1,7 +1,10 @@
-google-genai>=0.3.0
+requests>=2.31.0
 yt-dlp>=2024.1.0
 opencv-python>=4.9.0
 numpy>=1.26.0
 Pillow>=10.0.0
 Flask>=3.0.0
+
+# Optional: only needed for the speech-aware headlines described in the README.
+# Safe to remove if you never set OPENAI_API_KEY.
 openai>=1.0.0

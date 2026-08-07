@@ -1,78 +1,112 @@
 import os
 import time
 import traceback
+import uuid
 
 from flask import Flask, render_template, request, url_for
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.utils import secure_filename
 
-from thumbnail_picker import agent, compose, config, download, extract, transcribe
+from thumbnail_picker import config, download, kie, pipeline
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
 
 OUTPUT_DIR = os.path.join(app.static_folder, "outputs")
+INCOMING_DIR = os.path.join(config.WORK_DIR, "_incoming")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _page(**kwargs):
+    return render_template(
+        "index.html",
+        max_upload_mb=int(config.MAX_UPLOAD_BYTES / 1024 / 1024),
+        allowed_extensions=",".join(sorted(config.ALLOWED_UPLOAD_EXTENSIONS)),
+        **kwargs,
+    )
+
+
+def _save_upload(file_storage) -> str:
+    """Stream the uploaded video to a temp path in the work dir and return it."""
+    os.makedirs(INCOMING_DIR, exist_ok=True)
+    extension = os.path.splitext(secure_filename(file_storage.filename))[1].lower()
+    temp_path = os.path.join(INCOMING_DIR, f"{uuid.uuid4().hex}{extension}")
+    file_storage.save(temp_path)
+    return temp_path
+
+
+def _resolve_source(youtube_url: str, uploaded):
+    """Turn whichever input the user supplied into a VideoSource."""
+    if uploaded is not None and uploaded.filename:
+        temp_path = _save_upload(uploaded)
+        try:
+            return download.ingest_local_video(temp_path, uploaded.filename, move=True)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    return download.download_video(youtube_url)
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    return _page()
 
 
 @app.route("/generate", methods=["POST"])
 def generate():
     youtube_url = request.form.get("youtube_url", "").strip()
+    uploaded = request.files.get("video_file")
+    has_upload = uploaded is not None and bool(uploaded.filename)
+    active_tab = "upload" if has_upload else "link"
 
-    if not youtube_url:
-        return render_template("index.html", error="Please paste a YouTube link.")
+    if not youtube_url and not has_upload:
+        return _page(error="Paste a YouTube link or choose a video file to upload.")
 
     try:
-        dl = download.download_video(youtube_url)
+        source = _resolve_source(youtube_url, uploaded)
 
-        frames_dir = os.path.join(os.path.dirname(dl.video_path), "frames")
-        shortlist = extract.get_shortlist(dl.video_path, dl.duration, frames_dir)
-        if not shortlist:
-            return render_template(
-                "index.html",
-                youtube_url=youtube_url,
-                error="No usable frames passed the sharpness/exposure filter for this video. Try a different one.",
-            )
-
-        transcript_segments = transcribe.transcribe(dl.video_path) if transcribe.is_available() else []
-
-        selection = agent.pick_best_frame(shortlist, transcript_segments)
-        chosen = next(c for c in shortlist if c.id == selection.candidate_id)
-
-        output_filename = f"{dl.video_id}.jpg"
+        output_filename = f"{source.video_id}.jpg"
         output_path = os.path.join(OUTPUT_DIR, output_filename)
-        compose.make_thumbnail(chosen.path, output_path, selection.caption, chosen.face_box)
-
-        image_url = url_for("static", filename=f"outputs/{output_filename}") + f"?v={int(time.time())}"
+        outcome = pipeline.generate_thumbnail(source, output_path)
 
         result = {
-            "image_url": image_url,
-            "title": dl.title,
-            "caption": selection.caption,
-            "timestamp": round(chosen.timestamp, 1),
-            "reason": selection.reason,
-            "transcribed": bool(transcript_segments),
+            "image_url": url_for("static", filename=f"outputs/{output_filename}") + f"?v={int(time.time())}",
+            "title": source.title,
+            "origin": source.origin,
+            "headline": outcome.plan.headline,
+            "timestamp": round(outcome.chosen.timestamp, 1),
+            "reason": outcome.plan.reason,
+            "text_side": outcome.text_side,
+            "rendered": outcome.rendered,
+            "transcribed": outcome.transcribed,
+            "warnings": outcome.warnings,
+            "image_model": config.KIE_IMAGE_MODEL,
+            "chat_model": config.KIE_CHAT_MODEL,
         }
-        return render_template("index.html", youtube_url=youtube_url, result=result)
+        return _page(youtube_url=youtube_url, result=result, active_tab=active_tab)
 
-    except RuntimeError as e:
-        # e.g. missing GEMINI_API_KEY, or Gemini not calling the tool
-        return render_template("index.html", youtube_url=youtube_url, error=str(e))
+    except (kie.KieError, RuntimeError) as e:
+        # Missing/invalid API key, out of credits, unusable video, model refused to answer.
+        return _page(youtube_url=youtube_url, error=str(e), active_tab=active_tab)
     except Exception as e:
         traceback.print_exc()
-        return render_template(
-            "index.html",
-            youtube_url=youtube_url,
-            error=f"{type(e).__name__}: {e}",
-        )
+        return _page(youtube_url=youtube_url, error=f"{type(e).__name__}: {e}", active_tab=active_tab)
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def too_large(_e):
+    return _page(
+        error=f"That video is over the {int(config.MAX_UPLOAD_BYTES / 1024 / 1024)} MB upload limit. "
+              "Export it smaller, trim it, or paste a YouTube link instead.",
+        active_tab="upload",
+    ), 413
 
 
 if __name__ == "__main__":
-    if not os.environ.get("GEMINI_API_KEY"):
-        print("WARNING: GEMINI_API_KEY is not set. Set it before generating a thumbnail:")
-        print('  $env:GEMINI_API_KEY = "your-key"')
+    if not os.environ.get(config.KIE_API_KEY_ENV):
+        print(f"WARNING: {config.KIE_API_KEY_ENV} is not set. Get a key at https://kie.ai/api-key, then:")
+        print(f'  $env:{config.KIE_API_KEY_ENV} = "your-key"')
     # threaded=True so one long-running /generate request doesn't freeze the whole server —
     # without it, the dev server is single-threaded and even the homepage becomes unreachable
     # while a thumbnail is being generated.

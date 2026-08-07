@@ -1,19 +1,21 @@
 # How It Works
 
-This document explains, in depth, how this project turns a YouTube link into a designed thumbnail — what each file does, why it's built the way it is, and the real bugs we hit and fixed along the way.
+This document explains, in depth, how Thumbsmith turns a video into a designed thumbnail — what each file does, why it's built the way it is, and the real bugs we hit and fixed along the way.
 
 ## Table of Contents
 
 1. [The Big Picture](#1-the-big-picture)
-2. [Why Two Layers? (The Core Design Decision)](#2-why-two-layers-the-core-design-decision)
+2. [Why Three Layers? (The Core Design Decision)](#2-why-three-layers-the-core-design-decision)
 3. [Project File Map](#3-project-file-map)
 4. [Stage-by-Stage Walkthrough](#4-stage-by-stage-walkthrough)
-   - [4.1 Download (`download.py`)](#41-download-downloadpy)
+   - [4.1 Getting the video (`download.py`)](#41-getting-the-video-downloadpy)
    - [4.2 Frame Sampling (`extract.py` — part 1)](#42-frame-sampling-extractpy--part-1)
    - [4.3 Heuristic Scoring (`extract.py` — part 2)](#43-heuristic-scoring-extractpy--part-2)
    - [4.3.5 (Optional) Speech Transcription (`transcribe.py`)](#435-optional-speech-transcription-transcribepy)
-   - [4.4 The Gemini Agent (`agent.py`)](#44-the-gemini-agent-agentpy)
-   - [4.5 Composing the Final Thumbnail (`compose.py`)](#45-composing-the-final-thumbnail-composepy)
+   - [4.4 Talking to kie.ai (`kie.py`)](#44-talking-to-kieai-kiepy)
+   - [4.5 The Art Director (`director.py`)](#45-the-art-director-directorpy)
+   - [4.6 The Render (`generate.py`)](#46-the-render-generatepy)
+   - [4.7 Composing the Headline (`compose.py`)](#47-composing-the-headline-composepy)
 5. [Two Ways to Run It: CLI vs. Web App](#5-two-ways-to-run-it-cli-vs-web-app)
    - [5.1 CLI (`main.py`)](#51-cli-mainpy)
    - [5.2 Web App (`app.py` + `templates/index.html`)](#52-web-app-apppy--templatesindexhtml)
@@ -25,66 +27,68 @@ This document explains, in depth, how this project turns a YouTube link into a d
 
 ## 1. The Big Picture
 
-**Input:** a YouTube URL.
-**Output:** a designed 1280×720 thumbnail JPEG — a good frame, color-punched, with a bold caption overlaid.
-
-The pipeline has six steps, run in a straight line:
+**Input:** a YouTube URL, or a video file you upload.
+**Output:** a 1280×720 thumbnail JPEG — the strongest frame, re-rendered as a designed image, with a headline placed where it will actually be read.
 
 ```
-YouTube URL
-    │
-    ▼
-① Download video (yt-dlp)              — thumbnail_picker/download.py
-    │
-    ▼
-② Sample ~100-150 frames (ffmpeg)       — thumbnail_picker/extract.py
-    │
-    ▼
-③ Score every frame with cheap CV       — thumbnail_picker/extract.py
-   (sharpness, face presence, exposure)
-    │
-    ▼  (top 8 candidates only)
-③.5 (optional) Transcribe the audio     — thumbnail_picker/transcribe.py
-    with OpenAI Whisper, if OPENAI_API_KEY is set
-    │
-    ▼
-④ Gemini looks at the 8 (+ nearby        — thumbnail_picker/agent.py
-   speech, if transcribed) and picks
-   the best one + writes a caption
-    │
-    ▼
-⑤ Crop, resize, color-boost, and        — thumbnail_picker/compose.py
-   overlay the caption text
-    │
-    ▼
-thumbnail.jpg
+YouTube URL ──┐
+              ├──► ① Get the video                  — download.py
+video file ───┘         │
+                        ▼
+                 ② Sample ~100-150 frames (ffmpeg)  — extract.py
+                        │
+                        ▼
+                 ③ Score + de-duplicate             — extract.py
+                    (sharpness, face, exposure,
+                     colour, composition)
+                        │
+                        ▼  (top 8 candidates only)
+                 ③.5 (optional) Transcribe audio    — transcribe.py
+                     with Whisper, if OPENAI_API_KEY is set
+                        │
+                        ▼
+                 ④ Art director → ThumbnailPlan     — director.py
+                    (frame, headline, layout,
+                     accent colour, art direction)
+                        │
+                        ▼
+                 ⑤ GPT Image 2 re-renders the       — generate.py
+                    chosen frame, image-to-image
+                        │
+                        ▼
+                 ⑥ Draw the headline                — compose.py
+                        │
+                        ▼
+                  thumbnail.jpg
 ```
 
-Steps ①–③ and ⑤ are **plain deterministic code** — no AI, no API calls, free, fast, and 100% reproducible. Step ④ is the **one place an actual AI model is involved** (with an optional second AI call at ③.5 — see below), and it's involved because it's doing something heuristics genuinely can't: judging which frame is *compelling*, not just technically "correct."
+Steps ①–③ and ⑥ are **plain deterministic code** — no AI, no API calls, free, fast, reproducible. Steps ④ and ⑤ are the model stages, and both run on [kie.ai](https://kie.ai) under a single `KIE_API_KEY`.
+
+`pipeline.py` holds this whole sequence in one function, `generate_thumbnail(source, output_path)`. The CLI and the web app are both thin wrappers around it.
 
 ---
 
-## 2. Why Two Layers? (The Core Design Decision)
+## 2. Why Three Layers? (The Core Design Decision)
 
-The very first question this project raises is: **do you need an AI agent at all, or can you just write scoring math?**
+The first question this project raises is: **do you need a model at all, or can you just write scoring math?**
 
-The answer we landed on: **both, but for different jobs.**
-
-- **Classical computer vision (OpenCV) is great at objective, measurable properties** of an image: Is it blurry? Is it too dark? Is there a face in it? These are things you can compute with a formula, and a formula is faster, free, and perfectly consistent.
-- **Classical computer vision is bad at *taste*.** It has no way to know that a frame with "$3,459 saved" written on screen is more clickable than a frame that's merely sharp and well-lit. That requires actually understanding what's happening in the image and reasoning about what a human would click on — which is exactly what a vision-capable LLM is good at.
-
-So the architecture is:
+The answer: **you need three different things, and only two of them are a model.**
 
 | Layer | What it does | Technology | Cost |
 |---|---|---|---|
-| **Layer 1 — pre-filter** | Downloads the video, samples ~100-150 frames, scores each with sharpness/face/exposure math, keeps only the top 8 | Plain Python + OpenCV + ffmpeg | Free, no API calls |
-| **Layer 2 — the agent** | Looks at those 8 images and picks the one a human would actually click on, then writes a caption | Google Gemini (vision + function calling) | Free tier (rate-limited) |
+| **1 — pre-filter** | Get the video, sample ~100-150 frames, score each on sharpness/face/exposure/colour/composition, de-duplicate, keep the top 8 | Python + OpenCV + ffmpeg | Free, no API calls |
+| **2 — judgment** | Look at those 8 and decide which one earns the click, what to write on it, and how it should be laid out | kie.ai chat model (vision) | One request |
+| **3 — craft** | Turn that plan into a picture that looks designed rather than screenshotted | GPT Image 2 on kie.ai, then local typography | One render |
 
-**Why not skip Layer 1 and just show Gemini all 150 frames?** Two reasons: (1) most of those 150 frames are near-duplicates or obviously bad — blurry, mid-blink, transition frames — and there's no reason to spend API quota/tokens on them, and (2) the free tier has real rate limits, so keeping the image count small (8, not 150) keeps every run cheap and fast.
+**Why not show the model all 150 frames?** Most are near-duplicates or obviously bad — blurry, mid-blink, transition frames. Spending tokens on them buys nothing, and a long image list makes the model's attention worse, not better.
 
-**Why not skip Gemini and just use the heuristic score directly?** Because the heuristic score has no idea what's *on screen*. Every frame in our test video scored almost identically on sharpness/face/exposure (they're all clips of the same well-lit talking-head shot) — the heuristic literally cannot tell them apart. Gemini was the only part of the pipeline that noticed one specific frame had a compelling "$3,459 saved" graphic on it, which is the actual reason a viewer would click.
+**Why not skip the model and use the heuristic score directly?** Because the heuristic has no idea what's *on screen*. Every frame in our test video scores almost identically on sharpness/face/exposure — they're all clips of the same well-lit talking-head shot, and the heuristic literally cannot tell them apart. It also has no opinion whatsoever about what to write on the image, which is half the job.
 
-This is the general pattern worth remembering: **use cheap deterministic filtering to narrow down a large search space, then use the expensive/smart model only on the small shortlist where judgment actually matters.**
+**Why is there a render step at all — why not just put text on the frame?** That was the old design, and its ceiling is low. A raw video still is lit for video, not for a 210×118 tile in a grid: flat contrast, a busy background competing with the subject, no separation. GPT Image 2 fixes the things a colour-boost filter cannot — relighting the subject, pushing the background back, clearing clutter out of the space the headline needs.
+
+**Why image-to-image and not text-to-image?** Because a thumbnail's job is to represent *this* video. A prompt-generated picture invents a stranger in a scene that never happens. That's both dishonest and, in practice, a worse click — viewers bounce when the thumbnail doesn't match the first ten seconds, and that hurts the video more than a weak thumbnail does.
+
+**Why is the headline drawn locally instead of by the image model?** GPT Image 2 can render text, and `config.LET_MODEL_RENDER_TEXT` will let it. It's off by default because local text is the only way to guarantee three things at once: the exact words with no spelling drift, a size that survives being shrunk to thumbnail scale, and a position that is provably clear of the face and of YouTube's duration badge. Those are geometry problems with exact answers, and §2's principle applies — don't ask a model to estimate something deterministic code already knows precisely.
 
 ---
 
@@ -94,46 +98,55 @@ This is the general pattern worth remembering: **use cheap deterministic filteri
 thumbnail_picker/
     __init__.py         (empty — makes this a Python package)
     config.py           All tunable constants live here
-    download.py         YouTube URL -> local video file (yt-dlp)
-    extract.py          video file -> sampled frames -> heuristic-scored shortlist
-    transcribe.py       (optional) video file -> speech transcript, via OpenAI Whisper
-    agent.py            shortlist (+ transcript) -> Gemini picks best frame + writes caption
-    compose.py          chosen frame + caption -> final designed thumbnail JPEG
-main.py                 CLI entrypoint (wires the above together)
-app.py                  Flask web app (same pipeline, browser front-end)
+    download.py         YouTube URL or local file -> one VideoSource
+    extract.py          video -> sampled frames -> scored, de-duplicated shortlist
+    transcribe.py       (optional) video -> speech transcript, via OpenAI Whisper
+    kie.py              the only module that talks to kie.ai
+    director.py         shortlist (+ transcript) -> ThumbnailPlan
+    generate.py         chosen frame + plan -> GPT Image 2 render
+    compose.py          rendered image + plan -> final 1280x720 JPEG
+    pipeline.py         the whole run, start to finish
+main.py                 CLI entrypoint
+app.py                  Flask web app
 templates/
-    index.html          The web UI: URL input form + result display
+    index.html          Web UI: link tab + upload tab, and the result display
 static/
     outputs/            Generated thumbnails served by the web app
 models/
     face_detection_yunet_2023mar.onnx   Face-detection model (auto-downloaded)
-work/                   Scratch space: downloaded videos + sampled frames per video ID
+work/                   Scratch: videos, sampled frames, and renders per video ID
 requirements.txt        pip dependencies
+.env.example            Every environment variable, documented
 ```
 
-Nothing here is a black box — every stage is a plain Python function you can call directly and inspect, which is why we could test each stage independently (see the debugging story in [§7](#7-real-bugs-we-hit-and-how-we-fixed-them)).
+Nothing here is a black box — every stage is a plain function you can call directly and inspect, which is why each one could be tested independently.
 
 ---
 
 ## 4. Stage-by-Stage Walkthrough
 
-### 4.1 Download (`download.py`)
+### 4.1 Getting the video (`download.py`)
 
 ```python
-def download_video(url: str) -> DownloadResult
+def download_video(url: str) -> VideoSource
+def ingest_local_video(path: str, display_name=None, move=False) -> VideoSource
 ```
 
-Uses **`yt-dlp`** (a YouTube-downloader library, actively maintained fork of the old `youtube-dl`) via its Python API — not the command line — so failures raise catchable Python exceptions instead of just printing to a terminal.
+Two entry points, one return type. Everything downstream reads `VideoSource` (path, id, title, duration, origin) and never needs to know which one produced it.
 
-Key detail: the format string caps the download at 720p —
+**From YouTube.** Uses **`yt-dlp`** via its Python API — not the command line — so failures raise catchable exceptions instead of printing to a terminal. The format string caps the download at 720p:
 
 ```python
 "format": "bestvideo[height<=720]+bestaudio/best[height<=720]"
 ```
 
-There's no reason to pull a 4K source video when the final output is only 1280×720 — it would just waste bandwidth and disk space. Video and audio streams are downloaded separately and merged into one `.mp4` file, which is why **ffmpeg is a required external dependency** (yt-dlp shells out to it for the merge).
+There's no reason to pull a 4K source when the output is 1280×720. Video and audio are downloaded separately and merged into one `.mp4`, which is why **ffmpeg is a required external dependency**.
 
-The result is saved to `work/<video_id>/source.mp4` and the function returns a `DownloadResult` (path, video ID, title, duration) that every later stage needs.
+**From a file.** `ingest_local_video` validates the extension against `ALLOWED_UPLOAD_EXTENSIONS`, checks the size against `MAX_UPLOAD_BYTES`, and reads the duration with **ffprobe** — the local equivalent of the metadata probe the YouTube path does, and the same 2-hour ceiling applies (see [§7.6](#76-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output)).
+
+The file is placed in `work/<id>/` rather than read in place, so the pipeline writes frames next to the video exactly as it does for a download. It's **copied** by default, leaving the user's own file untouched; the web uploader passes `move=True` because its source is a throwaway temp file and copying half a gigabyte twice is pure waste.
+
+The id is derived from the filename and size (`upload-my-clip-a1b2c3d4e5`), so re-uploading the same file reuses its work directory instead of filling the disk with duplicates.
 
 ### 4.2 Frame Sampling (`extract.py` — part 1)
 
@@ -141,56 +154,56 @@ The result is saved to `work/<video_id>/source.mp4` and the function returns a `
 def sample_frames(video_path, duration, frames_dir) -> list[(path, timestamp)]
 ```
 
-This calls `ffmpeg` as a subprocess to pull frames out of the video at a fixed interval:
+Calls `ffmpeg` as a subprocess to pull frames at a fixed interval:
 
 ```
 ffmpeg -ss <skip> -i source.mp4 -t <trimmed_duration> -vf "fps=1/interval" frames/frame_%04d.jpg
 ```
 
-Two things worth understanding:
-
-**1. The interval adapts to video length**, capped so no video ever produces more than `MAX_SAMPLED_FRAMES` (150) frames — see `_sample_interval()`:
+**1. The interval adapts to video length**, capped so no video produces more than `MAX_SAMPLED_FRAMES` (150) frames:
 ```python
 def _sample_interval(duration):
     if natural_count <= max_count:
         return SAMPLE_INTERVAL_SECONDS   # normally 1 frame every 2 seconds
     return duration / max_count          # widen the gap for very long videos
 ```
-A 10-minute video samples every 2 seconds (~300 frames → capped at 150, so really every 4 seconds). A 2-hour video would sample roughly every 48 seconds. This bounds how long the scoring step (§4.3) takes regardless of video length.
+A 10-minute video samples every 2 seconds (~300 frames → capped at 150, so really every 4). A 2-hour video samples roughly every 48 seconds. This bounds scoring time regardless of input.
 
-**2. The first/last 3% of the video is skipped** (`SKIP_INTRO_OUTRO_FRACTION`), since intros, outros, and end-cards are usually low-value thumbnail material.
+**2. The first/last 3%** (`SKIP_INTRO_OUTRO_FRACTION`) is skipped — intros, outros, and end-cards are poor thumbnail material.
+
+**3. Stale frames are deleted first.** Re-running on a video whose work directory already exists used to leave the previous run's `frame_*.jpg` files in place, so a shorter second run would mix old frames into the new shortlist with wrong timestamps attached.
 
 ### 4.3 Heuristic Scoring (`extract.py` — part 2)
 
 ```python
 def score_frames(sampled) -> list[Candidate]
-def get_shortlist(video_path, duration, frames_dir) -> list[Candidate]   # sample + score + top 8
+def diversify(candidates, limit) -> list[Candidate]
+def get_shortlist(video_path, duration, frames_dir) -> list[Candidate]
 ```
 
-For every sampled frame, three independent signals are computed and combined into one score:
+Five signals per frame, combined into one score.
 
-**Sharpness** — via the Laplacian variance of the grayscale image. A Laplacian highlights edges; a sharp, in-focus image has lots of strong edges (high variance), while a blurry or motion-smeared frame has weak, muddy edges (low variance).
+**Sharpness** — Laplacian variance of the greyscale image. A Laplacian highlights edges; a sharp frame has strong edges (high variance), a blurry or motion-smeared one has muddy edges.
 ```python
 lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-sharpness_score = min(lap_var / 300.0, 1.0)   # 300 ≈ empirically "clearly sharp"
+sharpness_score = min(lap_var / 300.0, 1.0)
 ```
-Frames below `MIN_LAPLACIAN_VAR` (20) are rejected outright as unusable — a hard floor, not just a low score.
+Frames below `MIN_LAPLACIAN_VAR` (20) are rejected outright — a hard floor, not a low score.
 
-**Face presence** — a face detector runs on every frame and, if it finds one, records both `has_face = True` **and the face's exact pixel bounding box** (`face_box = (x, y, w, h)`, the largest face if there are several). That bounding box isn't just used for scoring — it's what Stage ⑤ uses later to place the caption without covering the face (see [§4.5](#45-composing-the-final-thumbnail-composepy)). (See [§7.1](#71-opencv-50-deleted-the-classic-face-detector) for why this isn't the simple `cv2.CascadeClassifier` you'd expect from most tutorials.)
+**Face** — YuNet records the largest face's exact pixel box (see [§7.1](#71-opencv-50-deleted-the-classic-face-detector)). The score is *not* a boolean. A face that fills 1% of the frame is a person standing somewhere in a wide shot, which is dead weight at thumbnail size; `_face_scores` ramps quality up to `IDEAL_FACE_AREA_FRACTION` (12%) and then tapers back down, because an extreme close-up crops out context and leaves nowhere for text.
 
-**Exposure** — via the grayscale histogram: what fraction of pixels are near-black or near-white ("dead" pixels with no detail), and how close the average brightness is to a well-exposed midpoint (125 out of 255).
+**Exposure** — from the greyscale histogram: what fraction of pixels are dead black or blown white, and how close the mean is to a well-exposed 125/255.
+
+**Colourfulness** — the Hasler–Süsstrunk metric. Flat, grey, washed-out frames vanish in a YouTube grid no matter how sharp they are, and this is the cheapest reliable proxy for "does this frame have any punch".
+
+**Composition** — where the face sits. Peaks at the rule-of-thirds verticals (⅓ or ⅔ across) and around 42% down, worst dead-centre or jammed against an edge. An off-centre subject is what leaves usable negative space for the headline, so this signal directly serves the layout stage.
+
 ```python
-brightness_closeness = 1.0 - abs(mean_brightness - 125) / 125
-exposure_score = brightness_closeness - (dark_frac + bright_frac)   # clamped to [0, 1]
+total = 0.25 * sharpness + 0.35 * face_quality + 0.15 * exposure
+      + 0.15 * colourfulness + 0.10 * composition
 ```
 
-These three combine as a **weighted sum**:
-```python
-total = 0.4 * sharpness_score + 0.4 * has_face + 0.2 * exposure_score
-```
-Sharpness and face presence are weighted equally and heaviest, because "is this frame usable at all" and "is there a person in it" are the two dominant signals for a typical talking-head/tutorial video. Exposure is a lighter-weight tiebreaker. These weights are constants in `config.py`, meant to be tuned by eye rather than treated as gospel.
-
-Every scored candidate is sorted by `total` descending, and only the **top 8** (`SHORTLIST_SIZE`) move on to the Gemini stage.
+**De-duplication is the step that matters most.** Sorting by score and taking the top 8 sounds right and is quietly useless: in a talking-head video the eight highest-scoring frames are eight copies of the same shot, three seconds apart, and the art director has no real choice to make. `diversify()` walks candidates best-first and keeps one only if it is both **visually** different from everything kept so far (64-bit DCT perceptual hash, Hamming distance > `DEDUPE_HASH_DISTANCE`) and **temporally** separated (> `MIN_CANDIDATE_GAP_SECONDS`). If a short or very static video can't fill the shortlist that way, it backfills on score rather than returning two candidates.
 
 ### 4.3.5 (Optional) Speech Transcription (`transcribe.py`)
 
@@ -199,117 +212,122 @@ def transcribe(video_path: str) -> list[Segment]      # Segment = (start, end, t
 def text_near(segments, timestamp, window=6.0) -> str
 ```
 
-This stage is **entirely optional** — it only runs if the `OPENAI_API_KEY` environment variable is set. Without it, `transcribe.is_available()` returns `False`, every caller skips straight past this stage, and the pipeline behaves exactly as if this file didn't exist. This matters because, unlike Gemini's free tier, OpenAI's transcription API has no persistent free quota — it's genuinely cheap (~$0.006/minute of audio, a few cents per video) but it is real billed usage, so it shouldn't be a silent requirement.
+**Entirely optional** — it runs only if `OPENAI_API_KEY` is set. Without it, `is_available()` returns `False`, callers skip the stage, and the pipeline behaves as if the file didn't exist. This matters because transcription is genuinely cheap (~$0.006/minute) but it *is* real billed usage, so it shouldn't be a silent requirement.
 
-Why it exists: Gemini's frame-picking and captioning (§4.4) only ever *sees* the candidate frames — it has no idea what the speaker is actually saying at that moment. A caption grounded in an actual spoken claim ("I saved $3,459 doing this") is a stronger hook than one guessed purely from what's visible. Transcription closes that gap.
+Why it exists: the art director only ever *sees* the frames. It has no idea what the speaker is saying. A headline grounded in an actual spoken claim ("I saved $3,459 doing this") is a stronger hook than one guessed from pixels.
 
 **How it works:**
-1. **Extract audio only, not the whole video** (`_extract_audio`, via ffmpeg: `-vn -acodec libmp3lame -b:a 64k -ar 16000 -ac 1`). OpenAI's transcription endpoint caps uploads at 25MB — a mono 16kHz 64kbps MP3 keeps even a long video's audio track well under that (roughly 0.5MB per minute), where sending the full merged video file would risk blowing past the limit on anything more than a few minutes long.
-2. **Transcribe with OpenAI Whisper** (`client.audio.transcriptions.create(model="whisper-1", response_format="verbose_json")`), which returns not just the full text but **timestamped segments** — exactly what's needed to answer "what was being said around second 493.2?" rather than just "what was said somewhere in this video?"
-3. **`text_near(segments, timestamp, window=6.0)`** concatenates every segment whose time range overlaps a ±6 second window around a candidate frame's timestamp — a small, relevant excerpt, not the whole transcript.
-4. **Every failure mode degrades to "no transcript," never a crash.** Missing key, missing `openai` package, network failure, ffmpeg failure, malformed response — all caught and turned into `[]`. Transcription is context enrichment, not a required stage; a run should never fail because this optional nice-to-have didn't work.
+1. **Extract audio only** (`-vn -acodec libmp3lame -b:a 64k -ar 16000 -ac 1`). The transcription endpoint caps uploads at 25MB; a mono 16kHz 64kbps MP3 is roughly 0.5MB per minute, so even a long video fits, where the merged video file would not.
+2. **Transcribe with Whisper** (`response_format="verbose_json"`), which returns **timestamped segments** — what's needed to answer "what was said around second 493?" rather than "what was said somewhere in this video?"
+3. **`text_near`** concatenates segments overlapping a ±6s window around a candidate's timestamp.
+4. **Every failure degrades to "no transcript", never a crash.** Missing key, missing package, network failure, ffmpeg failure, malformed response — all caught, all return `[]`.
 
-**How it plugs into the Gemini call (§4.4):** `main.py`/`app.py` call `transcribe.transcribe(video_path)` once (if available) and pass the resulting segments into `agent.pick_best_frame(shortlist, transcript_segments)`. Inside `agent.py`, each candidate's text label gets an extra line when relevant speech was found nearby:
-```python
-label = f"^ candidate_id={c.id}, timestamp={c.timestamp:.1f}s"
-near_speech = transcribe.text_near(transcript_segments or [], c.timestamp)
-if near_speech:
-    label += f'\n  speech around this moment: "{near_speech}"'
-```
-The prompt tells Gemini explicitly to prefer a caption that echoes a concrete spoken claim over a purely visual guess when that context is present.
+The director labels each candidate with its nearby speech, and the brief tells it to anchor the headline in something actually said.
 
-### 4.4 The Gemini Agent (`agent.py`)
+### 4.4 Talking to kie.ai (`kie.py`)
 
-```python
-def pick_best_frame(shortlist: list[Candidate], transcript_segments: list[Segment] | None = None) -> Selection
-```
+Every network call to kie.ai lives in this one module. Nothing else in the codebase knows the platform exists, which is what makes swapping models a config change rather than a refactor.
 
-This is the one *required* AI-model call in the whole pipeline (transcription in §4.3.5 is an optional second one). Here's exactly what happens:
+Three shapes of call:
 
-**1. Images are resized down before upload** (`_resize_for_upload`, capped at 800px wide). Vision token cost scales with image resolution, so there's no reason to send full-resolution frames just to have Gemini glance at them.
+**`upload_image(path, max_width)`** — every other kie.ai endpoint takes image *URLs*, not bytes, so frames are downsized, JPEG-encoded, base64'd, and POSTed to the file-upload endpoint, which returns a public `downloadUrl` that lives for 24 hours.
 
-**2. All 8 images + a text prompt go into one request**, as a `contents` list mixing plain strings and `types.Part.from_bytes(...)` image blocks — this is Gemini's standard way of taking multiple images in a single call:
-```python
-parts = [PROMPT.format(n=8)]
-for c in shortlist:
-    parts.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
-    parts.append(f"^ candidate_id={c.id}, timestamp={c.timestamp:.1f}s")
-```
-Each image is immediately followed by a text label identifying its `candidate_id`, so Gemini can refer back to a specific frame unambiguously in its answer.
+**`chat(messages, model)`** — an OpenAI-compatible chat completion, used for the vision stage. Synchronous; the answer is in `choices[0].message.content`. Content that comes back as typed parts rather than a bare string is flattened, since deployments differ on that.
 
-**3. One tool does two jobs at once.** Instead of asking Gemini to write free-form text and then trying to parse an answer out of it (fragile), we give it exactly one function to call, and its parameters *are* the structured output we want:
+**`run_image_task(model, input)`** — the asynchronous job flow the image models use. POST to `createTask`, get a `taskId`, then poll `recordInfo` until `state` reaches `success` (result URLs live in the `resultJson` string) or `fail`. Polling runs every 3s up to `KIE_POLL_TIMEOUT_SECONDS`.
+
+**Error handling is the bulk of this file, on purpose.** kie.ai returns its real status in the JSON body rather than only the HTTP code, so `_explain_http_error` reads the body first and turns the common cases into sentences a human can act on — a rejected key names the environment variable, an empty balance links to billing, a rate limit says to wait. `_post` retries transport errors and 5xx with backoff, and never retries a 4xx, because a bad key does not become a good key on attempt three.
+
+### 4.5 The Art Director (`director.py`)
 
 ```python
-def pick_thumbnail(candidate_id: str, reason: str, caption: str) -> dict:
-    """Record the chosen frame and its caption."""
+def direct(shortlist, frame_urls, transcript_segments=None, title="") -> ThumbnailPlan
 ```
 
-The **prompt** tells Gemini to do both things — pick the best frame, and write a punchy 2–5 word ALL-CAPS caption (a hook, not a description) — and then call `pick_thumbnail` with both values.
-
-Earlier versions of this pipeline also asked Gemini to guess whether the caption should go at the `"top"` or `"bottom"` of the frame. **We removed that** — see [§4.5](#45-composing-the-final-thumbnail-composepy) for why letting Gemini guess placement from a downsized image was the wrong tool for that job, and what replaced it.
-
-This uses the `google-genai` SDK's **automatic function calling**: you pass a plain Python function (its docstring becomes the tool description Gemini sees, its type hints become the parameter schema), and the SDK executes it automatically the moment Gemini decides to call it. There's no manual "parse the tool call, run it myself, send the result back" loop to write — which is genuinely simpler than the equivalent pattern on some other model providers.
-
-**4. Getting the result back out.** Since `pick_thumbnail`'s actual *return value* isn't what we care about (we care about its *arguments*), the function captures them into a closure variable (`result_holder`) at the moment it's called:
-```python
-def pick_thumbnail(candidate_id, reason, caption):
-    result_holder["candidate_id"] = candidate_id
-    ...
-```
-After `generate_content()` returns, we read the selection out of `result_holder` rather than trying to parse Gemini's final text response.
-
-**5. Retries with backoff.** Gemini's free tier occasionally returns a transient `503 UNAVAILABLE` ("model experiencing high demand"). We hit this for real during testing — twice in a row — so the call is wrapped in up to 3 attempts with increasing backoff (3s, 6s) before giving up and surfacing a clear error message.
-
-### 4.5 Composing the Final Thumbnail (`compose.py`)
+This stage returns a **plan, not a pick**:
 
 ```python
-def make_thumbnail(frame_path, output_path, caption="", face_box=None) -> None
+@dataclass
+class ThumbnailPlan:
+    candidate_id: str      # which frame
+    reason: str            # why it wins
+    headline: str          # 2-4 words, ALL CAPS, <= 28 chars
+    accent_word: str       # the one word to colour, or ""
+    subject_side: str      # left | right | center
+    accent_color: str      # #RRGGBB
+    scene_direction: str   # art direction for the image model
 ```
 
-Four steps, in order:
+**Why one structured plan instead of separate calls.** The render needs to know where to leave negative space; the compositor needs to know where the text goes; both need to agree. Deriving them from one answer is what keeps the caption, the empty half of the picture, and the text placement consistent. `plan.text_side` is a property, not a field — it's just the opposite of `subject_side`, and computing it beats trusting the model to keep two fields in sync.
 
-**1. Crop to 16:9.** The raw frame might not be exactly 16:9 depending on the source video's aspect ratio, so `_crop_box_for_aspect` computes a centered crop box for the longer dimension. Unlike a plain crop-and-forget, this function's *return value* (the crop box) is kept, because step 4 needs it to translate face coordinates into the final image.
+**The brief encodes actual thumbnail craft**, not a vague "pick a good frame": a large readable face with a *specific* emotion beats everything; reject mid-blink and mid-motion; prefer a frame with room around the subject; write a hook, never a description; short words win because the thing is judged at 210×118 in under a second.
 
-**2. Resize to exactly 1280×720** — YouTube's standard thumbnail resolution — using `Image.LANCZOS` for a high-quality resample. The resize scale factor is also kept for the same reason as the crop box.
+**Validation is not optional.** Model JSON is parsed defensively and every field is repaired or rejected:
+- `_extract_json` strips markdown fences and, failing that, slices from the first `{` to the last `}` — models pad JSON with prose.
+- `candidate_id` must be in the shortlist, or the plan is rejected outright.
+- The headline is uppercased, stripped of trailing punctuation, and trimmed **on a word boundary** if over-length — a clipped word reads as a bug.
+- `accent_word` is kept only if it really is one of the headline's words, otherwise the compositor would highlight nothing.
+- `subject_side` falls back to `center`, `accent_color` to the configured default, if either is malformed.
 
-**3. Color-and-contrast "pop"** (`_boost_colors`) — a real designed thumbnail is punchier than a raw video frame, so this always applies:
+On a validation failure the model is shown its own bad output and asked once more. One retry only — a model that can't produce valid JSON twice won't on the third try, and each attempt costs credits.
+
+### 4.6 The Render (`generate.py`)
+
 ```python
-img = ImageOps.autocontrast(img, cutoff=1)       # stretch the tonal range
-img = ImageEnhance.Contrast(img).enhance(1.2)    # +20% contrast
-img = ImageEnhance.Color(img).enhance(1.35)      # +35% saturation
-img = ImageEnhance.Sharpness(img).enhance(1.15)  # +15% sharpness
+def render(frame_path, plan, dest_path) -> str
+def render_or_fallback(frame_path, plan, dest_path) -> tuple[str, str | None]
 ```
 
-**4. Draw the caption, avoiding the face** (`_draw_caption`) — this is the part that changed the most, in response to real feedback that early versions of this pipeline sometimes drew the caption right over the subject's face.
+The chosen frame is uploaded at full width (the director's copies were downsized to 800px for token cost; this one *is* the input the render is built from) and sent to `gpt-image-2-image-to-image` with a prompt assembled from three parts:
 
-The original design asked *Gemini* to guess whether the caption should go "top" or "bottom," based on an 800px-wide downsized copy of the image. That was the wrong tool for the job: Gemini has no pixel-precise idea where the face actually is, so its guess was sometimes wrong. Meanwhile, `extract.py`'s own face detector (§4.3) had already computed the **exact bounding box** of the face on the full-resolution frame — that data just wasn't being used for placement. The fix was to stop asking the LLM to guess something the deterministic CV code already knew precisely:
+1. **A fixed base direction** — keep the same person, same face, same clothing, same expression; do not restyle into an illustration. Then: grade for contrast and saturation, key-light the face, rim-light the edge, push the background darker and blurred, remove clutter, keep skin natural.
+2. **A negative-space clause** keyed off `subject_side` — "keep the subject filling the RIGHT half, the LEFT half must stay visually calm and uncluttered". This is the instruction that makes the layout work.
+3. **The director's `scene_direction`**, which is the only shot-specific part.
 
-- **`_map_face_box`** takes the face's bounding box (computed back in Stage ③, in the *original, uncropped* frame's pixel coordinates) and translates it through the exact same crop-offset and resize-scale used in steps 1–2, so it lines up correctly with the final 1280×720 canvas.
-- **`_text_band`** then picks whichever of the top or bottom strip has more clear vertical space above/below the mapped face box (with a small safety margin), and returns that strip's boundaries. If no face was detected at all (e.g. a screen-share or gameplay video), it just defaults to a full-height bottom band — the classic thumbnail-caption position.
-- The caption's **maximum font size is capped by how much room is actually available in that strip**, so a very close-up face (which leaves little clear space) automatically gets a smaller caption instead of overlapping anyway.
-- A **font-fitting loop** (`_fit_caption`) starts at that capped size and shrinks it in steps until the text wraps to **at most 2 lines** that fit within the image width (minus margins), using a simple greedy word-wrap (`_wrap_text`).
-- The font is **Impact** (the classic bold, condensed thumbnail/meme typeface) if present on the system, falling back to **Arial Bold**, then PIL's built-in default font as a last resort.
-- **A translucent rounded dark panel is drawn behind the text** (`ImageDraw.rounded_rectangle` on a separate `RGBA` overlay, alpha-composited onto the frame) before the text itself is drawn. This was the second half of the feedback fix — plain outlined text floating directly on a busy photo background reads as flat/unpolished; a soft dark panel behind it is what most real thumbnail templates do to guarantee contrast and make the text read as a deliberate design element rather than an afterthought.
-- Finally, the caption is rendered on top of the panel with a **thick black stroke outline around white fill** (`stroke_width`, `stroke_fill="black"`).
+Plus a hard **no-text rule**, because any letters the model draws would collide with the headline composited in the next stage.
 
-The result is saved as a JPEG at quality 90.
+**Failure is survivable.** `render_or_fallback` catches `KieError` and returns the original frame plus a warning instead of failing the run. A user who is out of credits or hits an outage still gets a graded, captioned thumbnail — worse than the rendered one, but a result. The warning is surfaced in the UI rather than swallowed, so nobody is misled about which they got.
 
-> **Why not just have Gemini return a bounding box instead of "top"/"bottom"?** We could have — but the face detector already computed a pixel-perfect box on the full-resolution frame, for free, as part of scoring. Asking an LLM to re-derive that same information (less precisely, from a downsized copy) would be redundant. This is the same "right tool for the job" principle from [§2](#2-why-two-layers-the-core-design-decision): once you already have exact structured data from deterministic code, don't ask an LLM to estimate it again.
+### 4.7 Composing the Headline (`compose.py`)
+
+```python
+def make_thumbnail(image_path, output_path, headline="", accent_word="",
+                   accent_color=..., preferred_side="bottom", grade_strength=1.0) -> dict
+```
+
+**1. Crop to 16:9, focused on the face.** `_crop_box_for_aspect` takes an optional focal point, so cropping a tall frame doesn't slice the subject's head off.
+
+**2. Grade — but only as much as is needed.** `grade_strength` is 1.0 for a raw still and 0.25 for a GPT Image 2 render. The render already arrives graded; running the full boost over it again crushes the highlights.
+
+**3. Re-detect the face on the *final* canvas.** This is the non-obvious one. The crop, the resize, and above all the render itself all move the subject, so the plan's idea of which half is empty can be stale by the time the picture comes back. Placement has to answer to where the face is *now*, not where it was in the source frame.
+
+**4. Choose a zone.** Four candidate zones — left column, right column, bottom band, top band — each already inside the safe margin and clear of the **duration badge** YouTube stamps over the bottom-right corner.
+
+Zones are judged by **clearance, not overlap**: the tallest contiguous strip the face does not cut through. This distinction is the whole ball game. Measuring covered *area* lets a small, dead-centre face look harmless in a wide top band — right up until the headline is painted straight across it. Measuring the surviving strip asks the real question: is there room for the text? The director's chosen side is kept whenever it clears `MIN_CLEARANCE_FRACTION`, and only overridden when the face genuinely leaves no room, because second-guessing the plan on a technicality throws away the negative space the render was built around.
+
+**5. Place the block within the zone.** `_block_top` centres the text vertically, then slides it above or below the face if it intrudes. This is what lets a tall column still work for a subject whose head sits high in the frame, instead of bouncing the headline to a different side entirely.
+
+**6. Fit the type.** Shrink from `0.23 × height` until the wrapped lines fit — at most 3 lines in a column, 2 in a band. The available width subtracts **twice the stroke width**, because `textlength` measures glyphs only and the outline adds thickness on every side; without that allowance the headline overhangs the exact margin YouTube crops on some surfaces.
+
+**7. Draw it.** A dark gradient **scrim** fades in from the headline's side, solid at the edge and gone by 70% across, so type always has something to sit on while the subject stays untouched. Its strength adapts to how bright and busy the zone measured. Then a Gaussian-blurred **drop shadow** on its own layer, then the text itself — white with a heavy black stroke, drawn word by word so the **accent word** can take the plan's colour.
+
+Saved as JPEG at quality 92. Returns `{"text_side", "face_detected"}` so the caller can report what actually happened.
 
 ---
 
 ## 5. Two Ways to Run It: CLI vs. Web App
 
-Both entry points call the **exact same pipeline functions** (`download_video`, `get_shortlist`, the optional `transcribe`, `pick_best_frame`, `make_thumbnail`) — there's no duplicated pipeline logic, just two different ways of driving it.
+Both call `pipeline.generate_thumbnail`. They differ only in how they get a video and how they report progress — there is no duplicated pipeline logic.
 
 ### 5.1 CLI (`main.py`)
 
 ```powershell
 python main.py "<youtube-url>" -o thumbnail.jpg
-python main.py "<youtube-url>" --shortlist-only   # stop after Stage 1, no API call
+python main.py --file "C:\clips\video.mp4" -o thumbnail.jpg
+python main.py "<youtube-url>" --shortlist-only   # stop after Stage 1, no API calls
 ```
 
-`main.py`'s `run()` function is a thin, linear script: call each stage in order, print progress and the chosen candidate's reasoning/caption to the console, then save the output. The `--shortlist-only` flag exists specifically so you can iterate on the free, local part of the pipeline (download/sample/score) without spending Gemini API quota on every test run.
+The URL and `--file` are a mutually exclusive required group, so argparse rejects both-or-neither itself. `--shortlist-only` exists so you can iterate on the free, local part of the pipeline without spending credits on every test run — it also prints the full per-frame score breakdown, which is how the scoring weights get tuned.
 
 ### 5.2 Web App (`app.py` + `templates/index.html`)
 
@@ -317,128 +335,134 @@ python main.py "<youtube-url>" --shortlist-only   # stop after Stage 1, no API c
 python app.py    # serves http://127.0.0.1:5000
 ```
 
-`app.py` is a small **Flask** application with two routes:
-
 | Route | Method | Job |
 |---|---|---|
-| `/` | GET | Renders `templates/index.html` — the URL input form |
-| `/generate` | POST | Runs the full pipeline synchronously, then re-renders the same page with a result (or an error) |
+| `/` | GET | Renders the form — link tab and upload tab |
+| `/generate` | POST | Runs the pipeline synchronously, re-renders the page with a result or an error |
 
-**Why synchronous?** The pipeline takes 30–90 seconds. For a miniproject, the simplest thing that works is to just let the browser's POST request sit and wait — no job queue, no polling, no WebSockets. The page shows a "Working..." message (a few lines of plain JavaScript on form submit) so it's not confusing while it waits.
+**Two inputs, one form.** The tabs are cosmetic; both fields live in the same `multipart/form-data` form. On submit, JavaScript clears whichever field belongs to the *hidden* tab, so a stale URL left over from an earlier attempt can't quietly win over the file the user just dropped in. The server independently prefers the upload when both arrive, so the behaviour is defined even with JS off.
 
-**Error handling is deliberately visible, not silent.** `/generate` catches exceptions from any stage (missing API key, download failure, Gemini overloaded, no usable frames) and re-renders the page with a friendly error message instead of crashing the server or returning a blank 500 page.
+**Upload limits are enforced twice.** `MAX_CONTENT_LENGTH` makes Flask reject an oversized body before it's fully read, and a `RequestEntityTooLarge` handler turns that into the same friendly card as any other error rather than a raw 413 page. `ingest_local_video` re-checks size and extension, because the CLI path never goes through Flask at all.
 
-**Output storage.** Each generated thumbnail is saved to `static/outputs/<video_id>.jpg`, which Flask serves directly as a static file — the `<img>` tag in the result just points at that URL (with a `?v=<timestamp>` cache-busting query param, so regenerating the same video doesn't show a stale cached image).
+**Why synchronous?** The pipeline takes 1–3 minutes. For a project this size, letting the POST sit and wait is the simplest thing that works — no queue, no polling, no WebSockets. A "Working..." message appears on submit so the wait isn't confusing.
+
+**Errors are visible, not silent.** `/generate` catches `KieError` and `RuntimeError` and re-renders with a readable message. Warnings — a render that fell back, a transcript that came back empty, a missing face — are shown alongside a *successful* result, so a degraded run is never passed off as a clean one.
+
+**Output storage.** Each thumbnail is saved to `static/outputs/<video_id>.jpg` and served as a static file, with a `?v=<timestamp>` cache-buster so regenerating the same video doesn't show a stale image.
 
 ---
 
 ## 6. Configuration Reference (`config.py`)
 
-Every tunable constant lives in one place, with the reasoning behind each documented here rather than scattered as inline comments:
-
 | Constant | Value | Why |
 |---|---|---|
-| `SAMPLE_INTERVAL_SECONDS` | 2 | Base frame-sampling interval before the cap kicks in |
+| `SAMPLE_INTERVAL_SECONDS` | 2 | Base sampling interval before the cap kicks in |
 | `MAX_SAMPLED_FRAMES` | 150 | Hard ceiling regardless of video length — bounds scoring time |
-| `SKIP_INTRO_OUTRO_FRACTION` | 0.03 | Skip first/last 3% of the video (intros/outros/end-cards) |
-| `MAX_DOWNLOAD_HEIGHT` | 720 | No point downloading higher-res source than the 720p output |
-| `MAX_VIDEO_DURATION_SECONDS` | 7200 (2h) | Hard cap checked *before* downloading — a long video means gigabytes to download and hours of ffmpeg decoding regardless of how few frames get kept. See [§7.6](#76-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output) |
-| `SHORTLIST_SIZE` | 8 | How many top-scoring frames get shown to Gemini |
+| `SKIP_INTRO_OUTRO_FRACTION` | 0.03 | Skip first/last 3% (intros/outros/end-cards) |
+| `MAX_DOWNLOAD_HEIGHT` | 720 | No point downloading higher-res than the output |
+| `MAX_VIDEO_DURATION_SECONDS` | 7200 (2h) | Checked *before* downloading. See [§7.6](#76-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output) |
+| `MAX_UPLOAD_BYTES` | 512 MB | Upload ceiling, enforced by Flask and re-checked on ingest |
+| `ALLOWED_UPLOAD_EXTENSIONS` | mp4/mov/mkv/webm/avi/m4v | What ffprobe and ffmpeg reliably handle |
+| `SHORTLIST_SIZE` | 8 | How many frames reach the art director |
 | `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` | 1280 / 720 | YouTube's standard thumbnail resolution |
-| `MIN_LAPLACIAN_VAR` | 20 | Hard blur floor — frames below this are rejected, not just scored low |
-| `WEIGHT_SHARPNESS` / `WEIGHT_FACE` / `WEIGHT_EXPOSURE` | 0.4 / 0.4 / 0.2 | Heuristic scoring weights — tune these by eye against real videos |
-| `GEMINI_MODEL` | `"gemini-flash-lite-latest"` | An *alias*, not a pinned version — moves with Google's current lineup instead of going stale. Specifically the "Lite" tier, not plain `"gemini-flash-latest"`, because Lite has a separate (and much less easily exhausted) free-tier quota bucket — see [§7.5](#75-gemini-flash-latest-hit-its-daily-free-tier-quota-wall) |
-| `GEMINI_IMAGE_MAX_WIDTH` | 800 | Images are downsized to this before upload, to control vision token cost |
-| `FACE_MODEL_PATH` / `FACE_MODEL_URL` | — | Where the YuNet face model lives locally, and where to auto-download it from if missing |
-| `TRANSCRIBE_MODEL` | `"whisper-1"` | OpenAI's transcription model — only used if `OPENAI_API_KEY` is set (§4.3.5) |
-| `TRANSCRIBE_WINDOW_SECONDS` | 6.0 | How wide a window around a candidate's timestamp counts as "speech near this moment" |
+| `MIN_LAPLACIAN_VAR` | 20 | Hard blur floor — rejected, not just scored low |
+| `WEIGHT_*` | 0.25 / 0.35 / 0.15 / 0.15 / 0.10 | Sharpness, face, exposure, colour, composition. Tune by eye against real videos |
+| `IDEAL_FACE_AREA_FRACTION` | 0.12 | Face size that scores best; smaller is weak, much larger leaves no room for text |
+| `DEDUPE_HASH_DISTANCE` | 6 | Perceptual-hash distance below which two frames are "the same picture" |
+| `MIN_CANDIDATE_GAP_SECONDS` | 8.0 | Forces the shortlist to span the video instead of clustering |
+| `KIE_CHAT_MODEL` | `"gpt-5-2"` | The art director. Override with the `KIE_CHAT_MODEL` env var |
+| `KIE_IMAGE_MODEL` | `"gpt-image-2-image-to-image"` | The renderer. Override with `KIE_IMAGE_MODEL` |
+| `KIE_IMAGE_RESOLUTION` | `"2K"` | Rendered above 1280×720 so the downscale to output size stays crisp |
+| `KIE_POLL_TIMEOUT_SECONDS` | 420 | How long to wait on a render before giving up |
+| `DIRECTOR_IMAGE_MAX_WIDTH` | 800 | Frames are downsized this far before upload, to control vision token cost |
+| `RENDER_IMAGE_MAX_WIDTH` | 1280 | The chosen frame goes to the image model larger — it *is* the render input |
+| `LET_MODEL_RENDER_TEXT` | `False` | Let GPT Image 2 paint the headline instead of compositing it. See [§2](#2-why-three-layers-the-core-design-decision) |
+| `FALLBACK_TO_RAW_FRAME` | `True` | On render failure, still produce a thumbnail from the original frame |
+| `SAFE_MARGIN_FRACTION` | 0.045 | Keeps type off the edges YouTube crops |
+| `DURATION_BADGE_*_FRACTION` | 0.22 / 0.17 | The bottom-right corner YouTube covers with the runtime |
+| `FONT_CANDIDATES` | — | First existing font wins; Windows/macOS/Linux paths, `THUMBNAIL_FONT_PATH` first |
+| `FACE_MODEL_PATH` / `_URL` | — | Where YuNet lives locally, and where to auto-download it from |
+| `TRANSCRIBE_MODEL` | `"whisper-1"` | Only used if `OPENAI_API_KEY` is set (§4.3.5) |
+| `TRANSCRIBE_WINDOW_SECONDS` | 6.0 | How wide a window counts as "speech near this moment" |
 
 ---
 
 ## 7. Real Bugs We Hit and How We Fixed Them
 
-These aren't hypothetical — they're the actual failures we ran into getting this pipeline working, kept here because they're genuinely instructive about building on top of fast-moving libraries/APIs.
+These aren't hypothetical — they're the actual failures we ran into, kept here because they're genuinely instructive about building on top of fast-moving libraries and APIs.
 
 ### 7.1 OpenCV 5.0 deleted the classic face detector
 
-Every OpenCV tutorial you'll find uses:
+Every OpenCV tutorial uses:
 ```python
 cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 ```
-On the version installed here (**OpenCV 5.0**), this fails: `AttributeError: module 'cv2' has no attribute 'CascadeClassifier'`. The old Haar-cascade API — and the bundled `.xml` model files that shipped inside the `opencv-python` package — were removed entirely in OpenCV 5.0, replaced by a DNN-based detector called **`FaceDetectorYN`** (YuNet).
+On **OpenCV 5.0** this fails: `AttributeError: module 'cv2' has no attribute 'CascadeClassifier'`. The Haar-cascade API and the bundled `.xml` models were removed entirely, replaced by a DNN detector, **`FaceDetectorYN`** (YuNet).
 
-The fix (`extract.py`, `_ensure_face_model` / `_build_face_detector`): download a small (~230KB) YuNet ONNX model file on first use from the OpenCV Zoo GitHub repo, then build the detector with:
-```python
-cv2.FaceDetectorYN_create(model_path, "", (frame_width, frame_height))
-```
-and call `.detect(frame)` instead of `.detectMultiScale(gray)`. If the model can't be downloaded for any reason, `_build_face_detector` returns `None` and every frame just scores `has_face=False` — the pipeline degrades gracefully instead of crashing.
+The fix (`_ensure_face_model` / `_build_face_detector`): download the small (~230KB) YuNet ONNX model on first use from the OpenCV Zoo, then build the detector with `cv2.FaceDetectorYN_create(path, "", (w, h))` and call `.detect(frame)` instead of `.detectMultiScale(gray)`. If the model can't be downloaded, `_build_face_detector` returns `None`, every frame scores `has_face=False`, and the pipeline degrades instead of crashing.
 
-**Lesson:** don't trust a library's most commonly-tutorialized API to still exist in whatever version actually gets installed — check what's real in the installed package before writing code against it.
+**Lesson:** don't trust a library's most-tutorialized API to still exist in the version that actually gets installed.
 
-### 7.2 `gemini-2.5-flash` was already deprecated for new API keys
+### 7.2 The text placement was solving the wrong problem
 
-The model name that was the obvious, well-documented choice returned:
-```
-404 NOT_FOUND: This model models/gemini-2.5-flash is no longer available to new users.
-```
-even though it still showed up in `client.models.list()` — meaning it still exists for *some* accounts, just not new ones. We tested several models directly and found `gemini-2.0-flash` hit a `429 RESOURCE_EXHAUSTED` (quota), while **`gemini-flash-latest`** — an alias, not a version-pinned name — worked immediately.
+The first version of the compositor asked the *model* whether the caption should go "top" or "bottom", based on an 800px downsized copy. It guessed wrong often enough to matter, drawing captions across faces. That got replaced with deterministic placement off the face detector's exact box — the right call, and the general principle in [§2](#2-why-three-layers-the-core-design-decision).
 
-**Lesson:** when a fast-moving API offers an alias like `-latest`, prefer it over a pinned version for exactly this reason: it moves with the provider's own lineup instead of quietly aging out.
+But the replacement had a subtler bug that survived much longer: it scored each zone by **how much of the zone's area the face covered**. That metric quietly lies. A small face in the dead centre of a wide top band covers maybe 7% of its area — comfortably "clear" — and the headline gets painted straight across it, which is exactly what the original fix was supposed to prevent.
 
-### 7.3 Gemini's free tier returns transient 503s
+The metric that works is **clearance**: the tallest contiguous strip of the zone the face does not cut through. Under it, that same top band scores 61 usable pixels against the ~220 the text needs, and correctly loses to a side column with 468.
 
-During testing, back-to-back requests to the same model returned:
-```
-503 UNAVAILABLE: This model is currently experiencing high demand.
-```
-This is expected free-tier behavior, not a bug in our code — but a pipeline that just crashes on the first transient overload is a bad experience. We added a small retry loop in `agent.py` (up to 3 attempts, 3s/6s backoff) that only catches `genai_errors.ServerError` (5xx-class errors) — not 4xx errors like a bad API key, which should fail immediately rather than retry.
+**Lesson:** when a heuristic keeps producing the failure it was written to prevent, suspect the *metric*, not the thresholds. "How much is covered" and "is there room" sound like the same question and are not.
 
-### 7.4 A slow/unstable network stalled the ffmpeg install
+### 7.3 A slow/unstable network stalled the ffmpeg install
 
-Not a code bug, but worth recording: the initial `winget install` of ffmpeg stalled at 0 bytes downloaded for several minutes. Switching to a direct `curl` download of the smaller "essentials" build (instead of the 253MB "full" build `winget` was fetching) got it done in a couple of minutes once the connection recovered. If you ever hit this yourself: check whether the installer is actually making progress before assuming it's just slow.
+Not a code bug, but worth recording: the initial `winget install` of ffmpeg stalled at 0 bytes for several minutes. Switching to a direct `curl` download of the smaller "essentials" build (instead of the 253MB "full" build winget was fetching) finished in a couple of minutes. If you hit this: check whether the installer is actually making progress before assuming it's just slow.
 
-### 7.5 `gemini-flash-latest` hit its daily free-tier quota wall
+### 7.4 Free-tier model quotas, and why the provider changed
 
-After enough test runs, requests started failing with:
-```
-429 RESOURCE_EXHAUSTED: Quota exceeded for metric: generate_content_free_tier_requests,
-limit: 20, model: gemini-3.5-flash ... quotaId: 'GenerateRequestsPerDayPerModel-FreeTier'
-```
-This is a **different failure mode** from the transient 503s in §7.3 — it's a hard daily cap (20 requests/day for whichever model `"gemini-flash-latest"` currently resolves to), not something a short retry-with-backoff fixes. The response even includes a `retryDelay` of a few seconds, which is misleading for a *per-day* quota — retrying immediately just fails again.
+The project originally ran its judgment stage on Google Gemini's free tier, and spent a lot of time fighting it:
 
-Two things were wrong here, and both got fixed:
+- `gemini-2.5-flash` returned `404 NOT_FOUND: no longer available to new users` — while still appearing in `client.models.list()`, because it existed for *some* accounts.
+- Back-to-back requests returned transient `503 UNAVAILABLE: high demand`, which needed a retry-with-backoff loop.
+- Then a hard wall: `429 RESOURCE_EXHAUSTED ... limit: 20 ... quotaId: 'GenerateRequestsPerDayPerModel-FreeTier'` — 20 requests **per day**, which no amount of backoff fixes. The response even carried a `retryDelay` of a few seconds, which is actively misleading for a per-day quota.
 
-1. **The raw Google error dict was being shown directly in the UI** — accurate, but unhelpful (a wall of `{'error': {'code': 429, ...`). `agent.py` now catches `genai_errors.ClientError` specifically, checks whether the quota violation says `"PerDay"` (checking `str(e.details)`), and raises a plain-English `RuntimeError` explaining what actually happened and what to do about it — wait for the reset, switch models, or enable billing.
-2. **The model itself was too easily exhausted.** Testing showed that different Gemini model tiers have *separate* quota buckets: `"gemini-flash-latest"` and `"gemini-2.0-flash"` were both exhausted, but `"gemini-flash-lite-latest"` (the "Lite" tier — smaller/faster, still fully capable of vision + function calling for this use case) still had quota available. `config.GEMINI_MODEL` was switched to it. This is the same "alias, not a pinned version" reasoning as §7.2, just one tier down — a Lite alias moves with Google's lineup too, and its quota resets independently of the regular Flash tier's.
+Each of those got worked around in turn (aliases over pinned versions, backoff on 5xx only, switching to a model tier with a separate quota bucket). The workarounds held, but the pattern was the real signal: development kept stalling on quota rather than on the actual problem.
 
-**Lesson:** a 429 isn't automatically "wait and retry" — read the actual quota metadata (`quotaId`, `quotaDimensions.model`) to tell a short rate limit apart from a daily wall, and remember that different model tiers on the same API key can have completely independent quota buckets.
+Consolidating both model stages onto kie.ai replaced all of it — one key, one balance, and pay-per-use instead of a daily cliff. The lessons survive the migration and are baked into `kie.py`: **retry 5xx, never 4xx** (a bad key doesn't become good on attempt three), and **read what an error actually says** before deciding whether waiting will help.
+
+### 7.5 Duplicate frames made the shortlist meaningless
+
+The shortlist was "sort by score, take the top 8". On a talking-head video that returns eight frames from the same few seconds of the same shot — the model was being handed a choice that wasn't a choice, and the "best frame" was effectively whichever near-identical still won a rounding contest.
+
+The fix is `diversify()` (§4.3): a perceptual-hash and minimum-time-gap filter applied greedily, best-first, with a score-ordered backfill for videos too short or too static to satisfy it.
+
+**Lesson:** "top N by score" assumes the candidates are meaningfully different. When they're sampled from a continuous source, that assumption is usually false, and the ranking hides it.
 
 ### 7.6 A 10-hour video silently ran for over an hour with no output
 
-A user pasted a link to a **10-hour course video**. The web app just sat on "Working..." indefinitely — no error, no progress, nothing. Digging in with `Get-CimInstance Win32_Process` to see what the Python process was actually doing turned up an `ffmpeg` child process that had been running for over half an hour:
+Someone pasted a **10-hour course video**. The web app sat on "Working..." indefinitely — no error, no progress. Digging in with `Get-CimInstance Win32_Process` turned up an ffmpeg child process running for over half an hour:
 ```
 ffmpeg -ss 1080.15 -i source.mp4 -t 33844.7 -vf fps=0.00417 ... frame_%04d.jpg
 ```
-`-t 33844.7` is a **9.4-hour** trim window. Nothing was actually broken — `MAX_SAMPLED_FRAMES` (§4.2) correctly widened the sampling interval so the frame *count* stayed capped at 150, exactly as designed. The problem was something the design never accounted for: **there was no limit on video length in the first place.** A 10-hour video meant downloading a ~1.5GB file and then having ffmpeg decode through the entire 9+ hour span (sparse output sampling doesn't mean sparse decoding — most codecs still have to decode through the frames *between* the ones being kept) — real wall-clock hours, not the 30–90 seconds the UI promised.
+`-t 33844.7` is a **9.4-hour** trim window. Nothing was broken — `MAX_SAMPLED_FRAMES` correctly kept the frame *count* at 150, exactly as designed. The problem was what the design never accounted for: **there was no limit on video length at all.** Sparse output sampling doesn't mean sparse decoding — most codecs still decode through the frames between the ones kept — so this was real wall-clock hours against a UI promising 30–90 seconds.
 
-There was a second, compounding problem: Flask's dev server runs **single-threaded by default**, so once the long request started, the *entire server* — including the homepage — stopped responding to anything else. From the user's side, this looked like the app had frozen completely, not just one slow request.
+A compounding problem: Flask's dev server is **single-threaded by default**, so the long request froze the *entire* server, homepage included. From outside it looked like the app had crashed, not like one slow request.
 
-Two fixes, both in the "check assumptions the design implicitly relied on but never verified" category:
+Two fixes:
 
-1. **`download.py` now probes the video's duration *before* downloading anything** (`_probe_duration`, a metadata-only `yt_dlp.extract_info(url, download=False)` call — a couple seconds, no download). If it's longer than `config.MAX_VIDEO_DURATION_SECONDS` (2 hours, tunable), it raises a clear error immediately instead of silently attempting a doomed multi-hour job. Live streams (which report no fixed duration) are rejected the same way, for the same reason — there's no sensible "finish downloading" point for an unbounded stream.
-2. **`app.py` now passes `threaded=True` to `app.run()`**, so one slow `/generate` request no longer blocks every other request (including the homepage) from being served.
+1. **Probe duration before downloading anything** — a metadata-only `extract_info(url, download=False)` for YouTube, `ffprobe` for uploads. Over `MAX_VIDEO_DURATION_SECONDS`, it raises immediately instead of starting a doomed job. Live streams, which report no fixed duration, are rejected the same way — there's no sensible "finished" point for an unbounded stream.
+2. **`app.run(threaded=True)`**, so one slow `/generate` no longer blocks every other request.
 
-**Lesson:** "cap the frame count" and "cap the video length" are two different constraints — capping one doesn't cap the other, and the download + decode cost scales with the *source* video's length regardless of how few frames you keep. Any pipeline stage whose cost scales with an input the user controls (video length, file size, list length) needs its own explicit ceiling, checked as early and as cheaply as possible — ideally before the expensive part (the download) even starts, not after.
+**Lesson:** "cap the frame count" and "cap the video length" are different constraints, and capping one doesn't cap the other. Any stage whose cost scales with user-controlled input needs its own explicit ceiling, checked as early and as cheaply as possible — ideally before the expensive part starts.
 
 ---
 
 ## 8. What's Deliberately Not Here (Stretch Goals)
 
-These were left out on purpose to keep the project scoped and reliable, not because they'd be hard to bolt on:
+Left out on purpose to keep the project scoped and reliable, not because they'd be hard to bolt on:
 
-- **Subject cutout / background replacement** (MrBeast-style pop-out): would need a background-removal model (e.g. `rembg`, ~175MB), is slower, and can produce rough edges on some frames.
-- **Avoiding *all* on-screen graphics, not just faces**: text placement now precisely avoids the detected face (§4.5), but it doesn't know about other important on-screen elements — a lower-third logo, an existing caption baked into the source video, etc. It can still end up overlapping something that isn't a face. A fuller fix would run a general "busy region" detector (e.g. flag areas with high edge density or existing text) rather than just faces.
-- **Multiple faces**: if a frame has more than one face, only the largest one is currently protected from overlap — a two-person interview frame could still get a caption over the smaller face.
-- **Full agentic orchestration**: right now only the frame-picking/captioning step is a Gemini tool call — download/sampling/composing are plain deterministic function calls in `main.py`/`app.py`, not something Gemini decides to invoke itself. That's intentional: there's no judgment call in "download the video" or "where exactly is the face" (we already know that precisely), so there's no reason to route those through an LLM.
-- **A job queue for the web app**: `/generate` blocks synchronously for the full 30–90 second pipeline run. Fine for local/single-user use; a real multi-user deployment would want a background task queue instead.
-- **Transcript-aware frame selection, not just captioning**: `transcribe.py` (§4.3.5) currently only feeds nearby speech into the *caption wording* — Gemini isn't told to prefer a frame specifically because of a strong verbal claim being made at that exact instant. A fuller version would fold "how compelling is the speech right now" into frame scoring too, not just caption writing.
+- **A/B variants.** Generating 3 thumbnails per video and letting the user pick would be a real improvement and is a small change — `run_image_task` already returns a list of URLs. It's out because it triples the render cost per run.
+- **Multiple faces.** Only the largest face is protected from overlap, so a two-person interview frame could still get a headline over the smaller face.
+- **Avoiding *all* on-screen graphics, not just faces.** Placement avoids the face precisely, but knows nothing about a lower-third logo or a caption baked into the source video. A fuller fix would detect generally "busy" regions by edge density rather than just faces.
+- **Transcript-aware frame *selection*.** Nearby speech currently informs the headline wording only; the director isn't told to prefer a frame because of a strong verbal claim at that instant. A fuller version would fold speech into frame scoring too.
+- **A job queue for the web app.** `/generate` blocks for the full run. Fine for local single-user use; a real deployment would want background tasks and a progress stream — the `on_step` hook `pipeline.generate_thumbnail` already takes is the seam for it.
+- **Caching renders.** Re-running the same video re-renders it. The work directory is keyed by video id, so short-circuiting on an existing output would be easy; it's out because during development you almost always *want* the re-run.
