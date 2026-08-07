@@ -43,7 +43,7 @@ python app.py   # → http://127.0.0.1:5000
 
 The web UI has two tabs: paste a link, or drag in a video file (up to 512 MB; `.mp4 .mov .mkv .webm .avi .m4v`). Uploaded files are processed locally — only the 8 shortlisted frames ever leave your machine.
 
-Requires `ffmpeg` and `ffprobe` on PATH; `pip install -r requirements.txt` handles the Python side. Videos over 2 hours are rejected on purpose (see [HOW IT WORKS.md §7.6](<HOW IT WORKS.md#76-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output>)).
+Requires `ffmpeg` and `ffprobe` on PATH; `pip install -r requirements.txt` handles the Python side. Videos over 2 hours are rejected on purpose (see [HOW IT WORKS.md §7.7](<HOW IT WORKS.md#77-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output>)).
 
 Copy [.env.example](.env.example) for the full list of settings.
 
@@ -69,7 +69,7 @@ templates/, static/  web UI + generated output
 
 ## Why a model and not just a scoring script?
 
-Heuristics can tell you a frame is *technically fine* — sharp, well exposed, has a face in it. They have no idea that a frame with "$3,459 saved" on screen is more clickable than an equally sharp one without it, and no opinion at all about what to write on it. That judgment is the model's job. Everything else is plain, free, deterministic code. See [HOW IT WORKS.md §2](<HOW IT WORKS.md#2-why-two-layers-the-core-design-decision>).
+Heuristics can tell you a frame is *technically fine* — sharp, well exposed, has a face in it. They have no idea that a frame with "$3,459 saved" on screen is more clickable than an equally sharp one without it, and no opinion at all about what to write on it. That judgment is the model's job. Everything else is plain, free, deterministic code. See [HOW IT WORKS.md §2](<HOW IT WORKS.md#2-why-three-layers-the-core-design-decision>).
 
 ## Notes on placement
 

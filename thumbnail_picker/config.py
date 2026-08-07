@@ -62,7 +62,9 @@ MIN_CANDIDATE_GAP_SECONDS = 8.0
 # ---------------------------------------------------------------------------
 KIE_API_KEY_ENV = "KIE_API_KEY"
 
-KIE_UPLOAD_URL = "https://api.kie.ai/api/file-base64-upload"
+# The file-upload service lives on a different host to the rest of the API. docs.kie.ai
+# documents it under api.kie.ai, which 404s — this is the host that actually serves it.
+KIE_UPLOAD_URL = "https://kieai.redpandaai.co/api/file-base64-upload"
 KIE_CREATE_TASK_URL = "https://api.kie.ai/api/v1/jobs/createTask"
 KIE_RECORD_INFO_URL = "https://api.kie.ai/api/v1/jobs/recordInfo"
 KIE_CHAT_URL_TEMPLATE = "https://api.kie.ai/{model}/v1/chat/completions"

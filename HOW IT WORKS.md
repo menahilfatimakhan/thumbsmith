@@ -142,7 +142,7 @@ Two entry points, one return type. Everything downstream reads `VideoSource` (pa
 
 There's no reason to pull a 4K source when the output is 1280×720. Video and audio are downloaded separately and merged into one `.mp4`, which is why **ffmpeg is a required external dependency**.
 
-**From a file.** `ingest_local_video` validates the extension against `ALLOWED_UPLOAD_EXTENSIONS`, checks the size against `MAX_UPLOAD_BYTES`, and reads the duration with **ffprobe** — the local equivalent of the metadata probe the YouTube path does, and the same 2-hour ceiling applies (see [§7.6](#76-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output)).
+**From a file.** `ingest_local_video` validates the extension against `ALLOWED_UPLOAD_EXTENSIONS`, checks the size against `MAX_UPLOAD_BYTES`, and reads the duration with **ffprobe** — the local equivalent of the metadata probe the YouTube path does, and the same 2-hour ceiling applies (see [§7.7](#77-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output)).
 
 The file is placed in `work/<id>/` rather than read in place, so the pipeline writes frames next to the video exactly as it does for a download. It's **copied** by default, leaving the user's own file untouched; the web uploader passes `move=True` because its source is a throwaway temp file and copying half a gigabyte twice is pure waste.
 
@@ -360,7 +360,7 @@ python app.py    # serves http://127.0.0.1:5000
 | `MAX_SAMPLED_FRAMES` | 150 | Hard ceiling regardless of video length — bounds scoring time |
 | `SKIP_INTRO_OUTRO_FRACTION` | 0.03 | Skip first/last 3% (intros/outros/end-cards) |
 | `MAX_DOWNLOAD_HEIGHT` | 720 | No point downloading higher-res than the output |
-| `MAX_VIDEO_DURATION_SECONDS` | 7200 (2h) | Checked *before* downloading. See [§7.6](#76-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output) |
+| `MAX_VIDEO_DURATION_SECONDS` | 7200 (2h) | Checked *before* downloading. See [§7.7](#77-a-10-hour-video-silently-ran-for-over-an-hour-with-no-output) |
 | `MAX_UPLOAD_BYTES` | 512 MB | Upload ceiling, enforced by Flask and re-checked on ingest |
 | `ALLOWED_UPLOAD_EXTENSIONS` | mp4/mov/mkv/webm/avi/m4v | What ffprobe and ffmpeg reliably handle |
 | `SHORTLIST_SIZE` | 8 | How many frames reach the art director |
@@ -437,7 +437,24 @@ The fix is `diversify()` (§4.3): a perceptual-hash and minimum-time-gap filter 
 
 **Lesson:** "top N by score" assumes the candidates are meaningfully different. When they're sampled from a continuous source, that assumption is usually false, and the ranking hides it.
 
-### 7.6 A 10-hour video silently ran for over an hour with no output
+### 7.6 The documented upload endpoint 404s
+
+The very first live run died immediately:
+```
+kie.ai returned 404 while uploading a frame: No message available
+```
+`docs.kie.ai` documents base64 file upload at `https://api.kie.ai/api/file-base64-upload`. That host returns a 404 for the path. The service actually lives on a **different host**, `https://kieai.redpandaai.co/api/file-base64-upload` — which older versions of the docs used, and which still works. The rest of the API (`createTask`, `recordInfo`, chat) really is on `api.kie.ai`, so it's only this one endpoint that moves.
+
+Probing all three candidate URLs with the same payload took about ten seconds and made it obvious:
+```
+404  https://api.kie.ai/api/file-base64-upload
+200  https://kieai.redpandaai.co/api/file-base64-upload
+404  https://api.kie.ai/api/v1/file-base64-upload
+```
+
+**Lesson:** when an integration fails on the first real call, probe the endpoint directly with a minimal payload before touching the code. The failure was in the docs, not in anything the client was doing — and no amount of re-reading `kie.py` would have shown that.
+
+### 7.7 A 10-hour video silently ran for over an hour with no output
 
 Someone pasted a **10-hour course video**. The web app sat on "Working..." indefinitely — no error, no progress. Digging in with `Get-CimInstance Win32_Process` turned up an ffmpeg child process running for over half an hour:
 ```
