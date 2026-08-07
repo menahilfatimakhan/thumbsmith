@@ -3,7 +3,8 @@ yt-dlp>=2024.1.0
 opencv-python>=4.9.0
 numpy>=1.26.0
 Pillow>=10.0.0
-Flask>=3.0.0
+# 2.3 is the floor this was verified against; nothing here uses Flask 3-only API.
+Flask>=2.3.0
 
 # Optional: only needed for the speech-aware headlines described in the README.
 # Safe to remove if you never set OPENAI_API_KEY.
