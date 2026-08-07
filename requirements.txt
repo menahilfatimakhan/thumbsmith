@@ -6,6 +6,10 @@ Pillow>=10.0.0
 # 2.3 is the floor this was verified against; nothing here uses Flask 3-only API.
 Flask>=2.3.0
 
+# Lets you keep KIE_API_KEY in a .env file instead of exporting it every session.
+# Optional — without it, config.py just skips the .env load and reads the environment.
+python-dotenv>=1.0.0
+
 # Optional: only needed for the speech-aware headlines described in the README.
 # Safe to remove if you never set OPENAI_API_KEY.
 openai>=1.0.0

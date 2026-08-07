@@ -372,7 +372,7 @@ python app.py    # serves http://127.0.0.1:5000
 | `MIN_CANDIDATE_GAP_SECONDS` | 8.0 | Forces the shortlist to span the video instead of clustering |
 | `KIE_CHAT_MODEL` | `"gpt-5-2"` | The art director. Override with the `KIE_CHAT_MODEL` env var |
 | `KIE_IMAGE_MODEL` | `"gpt-image-2-image-to-image"` | The renderer. Override with `KIE_IMAGE_MODEL` |
-| `KIE_IMAGE_RESOLUTION` | `"2K"` | Rendered above 1280×720 so the downscale to output size stays crisp |
+| `KIE_IMAGE_RESOLUTION` | `"1K"` | The **only** cost lever — GPT Image 2 has no quality parameter. 6 credits ($0.03) at 1K, 10 ($0.05) at 2K, 16 ($0.08) at 4K. A 16:9 1K render already exceeds the 1280×720 export, so 2K/4K pixels are thrown away by the downscale |
 | `KIE_POLL_TIMEOUT_SECONDS` | 420 | How long to wait on a render before giving up |
 | `DIRECTOR_IMAGE_MAX_WIDTH` | 800 | Frames are downsized this far before upload, to control vision token cost |
 | `RENDER_IMAGE_MAX_WIDTH` | 1280 | The chosen frame goes to the image model larger — it *is* the render input |

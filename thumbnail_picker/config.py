@@ -1,5 +1,15 @@
 import os
 
+# Load a .env file if the user made one, so KIE_API_KEY can live in a file instead of
+# being exported in every new shell. Optional: python-dotenv is not a hard dependency,
+# and real environment variables always win over anything in .env.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
 # Frame sampling
 # ---------------------------------------------------------------------------
@@ -67,7 +77,14 @@ KIE_CHAT_REASONING_EFFORT = "low"
 # instead of being replaced by an invented stock person.
 KIE_IMAGE_MODEL = os.environ.get("KIE_IMAGE_MODEL", "gpt-image-2-image-to-image")
 KIE_IMAGE_ASPECT_RATIO = "16:9"
-KIE_IMAGE_RESOLUTION = "2K"
+
+# GPT Image 2 has no quality parameter — resolution is the only quality/cost selector.
+# On kie.ai that is 6 credits ($0.03) at 1K, 10 ($0.05) at 2K, 16 ($0.08) at 4K.
+#
+# 1K is the right default here, not just the cheapest: a 16:9 1K render still comes back
+# larger than the 1280x720 we export, so the extra pixels of a 2K render are thrown away
+# by the downscale in compose.py. Raise it only if you also raise OUTPUT_WIDTH/HEIGHT.
+KIE_IMAGE_RESOLUTION = os.environ.get("KIE_IMAGE_RESOLUTION", "1K")
 
 KIE_UPLOAD_PATH = "images/thumbsmith"
 KIE_REQUEST_TIMEOUT_SECONDS = 120

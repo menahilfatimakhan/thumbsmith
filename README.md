@@ -22,7 +22,9 @@ It is image-**to**-image on purpose. Generating a fresh picture from a prompt in
 
 ## Run it
 
-One key covers both model stages. Get it at [kie.ai/api-key](https://kie.ai/api-key).
+One key covers both model stages. Get it at [kie.ai/api-key](https://kie.ai/api-key), then either export it in your shell or copy [.env.example](.env.example) to `.env` and put it there.
+
+Each run costs roughly **$0.03** — one 1K GPT Image 2 render, plus a cheap vision call. Resolution is the only cost lever GPT Image 2 has; see [§6](<HOW IT WORKS.md#6-configuration-reference-configpy>).
 
 **CLI:**
 ```powershell
