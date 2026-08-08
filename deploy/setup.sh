@@ -70,21 +70,17 @@ echo "==> Installing the nginx site"
 # Two layouts in the wild: Debian's nginx package uses sites-available + sites-enabled,
 # while the upstream nginx.org package (which some Lightsail images ship) has conf.d only.
 # Writing to the wrong one silently leaves the default site serving.
+#
+# This only ever ADDS a config. An earlier version disabled every other site in conf.d to
+# clear the way for a default_server, and took a live unrelated app on this same box
+# offline. Thumbsmith owns port 8080 and nothing else — other vhosts are none of its
+# business, and a deploy script must never assume it is alone on the machine.
 if [ -d /etc/nginx/sites-available ]; then
     sudo cp "$APP_DIR/deploy/nginx.conf" /etc/nginx/sites-available/thumbsmith
     sudo ln -sf /etc/nginx/sites-available/thumbsmith /etc/nginx/sites-enabled/thumbsmith
-    sudo rm -f /etc/nginx/sites-enabled/default
     echo "    Debian layout (sites-enabled)"
 else
     sudo cp "$APP_DIR/deploy/nginx.conf" /etc/nginx/conf.d/thumbsmith.conf
-    # Any other conf.d server claiming default_server would collide with ours.
-    for f in /etc/nginx/conf.d/*.conf; do
-        case "$f" in
-            */thumbsmith.conf) continue ;;
-        esac
-        sudo mv "$f" "$f.disabled"
-        echo "    disabled $(basename "$f")"
-    done
     echo "    upstream layout (conf.d)"
 fi
 sudo nginx -t

@@ -32,6 +32,15 @@ ExecStart=/home/admin/thumbsmith/.venv/bin/gunicorn \
 Restart=always
 RestartSec=5
 
+# This box is shared with other production apps (newszn, support-bot, MariaDB, Docker) on
+# 945 MB of RAM. Without a cap, a memory spike here makes the kernel's OOM killer pick a
+# victim by score — and it might well pick MariaDB rather than us. MemoryMax contains
+# Thumbsmith to its own budget, and OOMScoreAdjust makes it the preferred casualty, so a
+# bad run degrades this service instead of the neighbours.
+MemoryHigh=380M
+MemoryMax=520M
+OOMScoreAdjust=600
+
 # The app only ever needs to write inside its own directory.
 NoNewPrivileges=true
 PrivateTmp=true
