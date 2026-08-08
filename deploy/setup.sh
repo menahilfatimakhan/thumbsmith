@@ -12,6 +12,21 @@ set -euo pipefail
 REPO="https://github.com/menahilfatimakhan/thumbsmith.git"
 APP_DIR="/home/admin/thumbsmith"
 
+echo "==> Ensuring swap exists"
+# Lightsail's small instances ship with ~1 GB of RAM and no swap. Decoding frames into
+# numpy arrays spikes well past that, and with no swap the kernel OOM-kills gunicorn
+# mid-render — which looks like a random 502 rather than a memory problem.
+if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile >/dev/null
+    sudo swapon /swapfile
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+    echo "    created a 2G swapfile"
+else
+    echo "    swap already present"
+fi
+
 echo "==> Installing system packages"
 sudo apt-get update -qq
 # ffmpeg carries ffprobe, which download.py needs to read the duration of uploads.

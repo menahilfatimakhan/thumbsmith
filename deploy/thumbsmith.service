@@ -13,10 +13,14 @@ WorkingDirectory=/home/admin/thumbsmith
 Environment=PYTHONUNBUFFERED=1
 
 # A render blocks its worker for 1-3 minutes, so the default 30s timeout would kill every
-# single request. Threads rather than processes because the wait is almost entirely network
-# I/O against kie.ai, not CPU.
+# single request.
+#
+# One worker, several threads. Threads because the wait is almost entirely network I/O
+# against kie.ai rather than CPU — but mainly because each *process* loads its own copy of
+# OpenCV and numpy, roughly 250 MB resident, and the target box has 945 MB of RAM. Two
+# workers plus frame scoring is an OOM kill waiting to happen; threads share that memory.
 ExecStart=/home/admin/thumbsmith/.venv/bin/gunicorn \
-    --workers 2 \
+    --workers 1 \
     --threads 4 \
     --timeout 600 \
     --graceful-timeout 30 \
