@@ -1,0 +1,39 @@
+[Unit]
+Description=Thumbsmith — AI YouTube thumbnail generator
+After=network.target
+
+[Service]
+Type=notify
+User=admin
+Group=admin
+
+# config.py calls load_dotenv(), which reads ./.env relative to the working directory,
+# so the API key never has to be passed through systemd or baked into the unit file.
+WorkingDirectory=/home/admin/thumbsmith
+Environment=PYTHONUNBUFFERED=1
+
+# A render blocks its worker for 1-3 minutes, so the default 30s timeout would kill every
+# single request. Threads rather than processes because the wait is almost entirely network
+# I/O against kie.ai, not CPU.
+ExecStart=/home/admin/thumbsmith/.venv/bin/gunicorn \
+    --workers 2 \
+    --threads 4 \
+    --timeout 600 \
+    --graceful-timeout 30 \
+    --bind 127.0.0.1:8000 \
+    --access-logfile - \
+    --error-logfile - \
+    app:app
+
+Restart=always
+RestartSec=5
+
+# The app only ever needs to write inside its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/admin/thumbsmith
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+# Server-only dependencies, kept out of requirements.txt because gunicorn does not run
+# on Windows — installing it there would succeed and then fail at startup.
+gunicorn>=21.2.0

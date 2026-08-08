@@ -25,3 +25,7 @@ thumbnail.jpg
 .DS_Store
 Thumbs.db
 test-thumbnail.jpg
+
+# SSH keys — never commit a private key.
+*.pem
+*.ppk
