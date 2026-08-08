@@ -29,3 +29,6 @@ test-thumbnail.jpg
 # SSH keys — never commit a private key.
 *.pem
 *.ppk
+
+# yt-dlp cookie jar, if used. Contains a live session - never commit it.
+cookies.txt

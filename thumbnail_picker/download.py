@@ -44,12 +44,56 @@ def _too_long_error(duration: float) -> RuntimeError:
 # YouTube
 # ---------------------------------------------------------------------------
 
+def _ydl_opts(**extra) -> dict:
+    """Base yt-dlp options, plus cookies and proxy when they have been configured."""
+    opts = {"quiet": True, "no_warnings": True, **extra}
+    if config.YTDLP_COOKIES_FILE and os.path.isfile(config.YTDLP_COOKIES_FILE):
+        opts["cookiefile"] = config.YTDLP_COOKIES_FILE
+    if config.YTDLP_PROXY:
+        opts["proxy"] = config.YTDLP_PROXY
+    return opts
+
+
+def _friendly_youtube_error(e: Exception) -> RuntimeError:
+    """Turn yt-dlp's wall of text into one sentence and a next step.
+
+    The bot-check message in particular is three URLs of yt-dlp documentation, which tells
+    a user of this app nothing about what they should do now.
+    """
+    text = str(e)
+
+    if "not a bot" in text or "Sign in to confirm" in text:
+        if config.YTDLP_COOKIES_FILE or config.YTDLP_PROXY:
+            return RuntimeError(
+                "YouTube is refusing to serve this video to the server, even with the "
+                "configured cookies or proxy. The cookies may have expired. Downloading the "
+                "video yourself and using the Upload tab always works."
+            )
+        return RuntimeError(
+            "YouTube is blocking downloads from this server, which it treats as a bot "
+            "because it runs in a datacentre. This is about where the server lives, not "
+            "about the video. Use the Upload tab instead, which never touches YouTube."
+        )
+
+    if "Private video" in text or "members-only" in text.lower():
+        return RuntimeError("That video is private or members-only, so it cannot be downloaded.")
+    if "Video unavailable" in text or "has been removed" in text:
+        return RuntimeError("That video is unavailable. Check the link, or try another one.")
+    if "is not a valid URL" in text or "Unsupported URL" in text:
+        return RuntimeError("That does not look like a YouTube link.")
+
+    first_line = text.split("\n")[0].replace("ERROR: ", "")
+    return RuntimeError(f"YouTube could not be reached for that link. {first_line}")
+
+
 def _probe_duration(url: str) -> float:
     """Fetch just the video's metadata (no download) so we can reject overly long videos in
     seconds instead of after downloading gigabytes and grinding through hours of ffmpeg decoding."""
-    opts = {"quiet": True, "no_warnings": True}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(_ydl_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise _friendly_youtube_error(e) from e
     return float(info.get("duration") or 0)
 
 
@@ -65,21 +109,23 @@ def download_video(url: str) -> VideoSource:
         raise _too_long_error(duration)
 
     out_template = os.path.join(config.WORK_DIR, "%(id)s", "source.%(ext)s")
-    ydl_opts = {
-        "format": f"bestvideo[height<={config.MAX_DOWNLOAD_HEIGHT}]+bestaudio/best[height<={config.MAX_DOWNLOAD_HEIGHT}]",
-        "outtmpl": out_template,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-    }
+    ydl_opts = _ydl_opts(
+        format=(f"bestvideo[height<={config.MAX_DOWNLOAD_HEIGHT}]+bestaudio/"
+                f"best[height<={config.MAX_DOWNLOAD_HEIGHT}]"),
+        outtmpl=out_template,
+        merge_output_format="mp4",
+    )
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        video_path = ydl.prepare_filename(info)
-        # merge_output_format can change the extension after download
-        if not os.path.exists(video_path):
-            base, _ = os.path.splitext(video_path)
-            video_path = base + ".mp4"
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_path = ydl.prepare_filename(info)
+            # merge_output_format can change the extension after download
+            if not os.path.exists(video_path):
+                base, _ = os.path.splitext(video_path)
+                video_path = base + ".mp4"
+    except yt_dlp.utils.DownloadError as e:
+        raise _friendly_youtube_error(e) from e
 
     return VideoSource(
         video_path=video_path,

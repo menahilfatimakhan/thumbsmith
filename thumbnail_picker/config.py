@@ -88,6 +88,26 @@ KIE_IMAGE_ASPECT_RATIO = "16:9"
 # by the downscale in compose.py. Raise it only if you also raise OUTPUT_WIDTH/HEIGHT.
 KIE_IMAGE_RESOLUTION = os.environ.get("KIE_IMAGE_RESOLUTION", "1K")
 
+# ---------------------------------------------------------------------------
+# YouTube access
+# ---------------------------------------------------------------------------
+# YouTube bot-gates datacenter IPs. The exact same video and the exact same yt-dlp version
+# that work from a home connection get "Sign in to confirm you're not a bot" from a cloud
+# host, and no player_client trick gets around it — the IP is what is flagged.
+#
+# Two ways out, both optional:
+#   YTDLP_COOKIES_FILE  path to a Netscape-format cookies.txt exported from a logged-in
+#                       browser. Effective, but cookies expire after days or weeks, and
+#                       Google may flag an account whose cookies appear from a server in
+#                       another country. Use a throwaway account, never a primary one.
+#   YTDLP_PROXY         a residential or rotating proxy URL. Costs money, but it is the
+#                       only fix that keeps working unattended.
+#
+# With neither set, the link tab simply fails on a blocked host and the upload tab, which
+# never touches YouTube, keeps working.
+YTDLP_COOKIES_FILE = os.environ.get("YTDLP_COOKIES_FILE", "")
+YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "")
+
 KIE_UPLOAD_PATH = "images/thumbsmith"
 KIE_REQUEST_TIMEOUT_SECONDS = 120
 KIE_POLL_INTERVAL_SECONDS = 3
