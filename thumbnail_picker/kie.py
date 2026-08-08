@@ -54,11 +54,11 @@ def _explain_http_error(response: requests.Response, what: str) -> KieError:
         return KieError(f"kie.ai rejected the API key while {what}. Check {config.KIE_API_KEY_ENV}.")
     if code == 402:
         return KieError(
-            f"kie.ai says the account is out of credits while {what}. "
+            f"The kie.ai account has run out of credits, so it stopped while {what}. "
             "Top up at https://kie.ai/billing and try again."
         )
     if code == 429:
-        return KieError(f"kie.ai rate limit hit while {what}. Wait a few seconds and retry.")
+        return KieError(f"kie.ai is rate limiting us while {what}. Give it a few seconds and try again.")
     return KieError(f"kie.ai returned {code} while {what}: {message}")
 
 
@@ -201,8 +201,8 @@ def _poll_task(task_id: str, on_progress=None) -> list[str]:
         time.sleep(config.KIE_POLL_INTERVAL_SECONDS)
 
     raise KieError(
-        f"kie.ai did not finish the render within {config.KIE_POLL_TIMEOUT_SECONDS}s. "
-        "The platform may be busy — try again."
+        f"kie.ai took longer than {config.KIE_POLL_TIMEOUT_SECONDS} seconds to render this. "
+        "It may just be busy, so it is worth another go."
     )
 
 

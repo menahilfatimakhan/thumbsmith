@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Thumbsmith — AI YouTube Thumbnails</title>
+  <title>Thumbsmith</title>
   <style>
     :root {
       color-scheme: dark;
@@ -133,8 +133,8 @@
   <div class="wrap">
     <h1>Thumbsmith</h1>
     <p class="sub">
-      Give it a video. It shortlists the strongest frames, art-directs one on kie.ai, re-renders it
-      with GPT Image&nbsp;2, and lays a headline where it will actually be read.
+      Give it a video and you get a thumbnail back. It finds the best frame, tidies it up, and
+      puts the text somewhere that isn't covering anyone's face.
     </p>
 
     <div class="card">
@@ -150,54 +150,53 @@
           <div class="row">
             <input type="url" name="youtube_url" placeholder="https://youtu.be/..."
                    value="{{ youtube_url or '' }}">
-            <button type="submit" class="go">Generate Thumbnail</button>
+            <button type="submit" class="go">Make thumbnail</button>
           </div>
         </div>
 
         <div class="panel {{ 'active' if active_tab == 'upload' else '' }}" id="panel-upload">
           <label class="drop" id="drop-zone">
-            <b id="file-label">Choose a video file or drop it here</b>
-            <span id="file-name">{{ allowed_extensions }} — up to {{ max_upload_mb }} MB</span>
+            <b id="file-label">Drop a video here, or click to pick one</b>
+            <span id="file-name">{{ allowed_extensions }}, up to {{ max_upload_mb }} MB</span>
             <input type="file" name="video_file" id="video-file" accept="video/*">
           </label>
           <div class="row">
-            <button type="submit" class="go">Generate Thumbnail</button>
+            <button type="submit" class="go">Make thumbnail</button>
           </div>
-          <div class="hint">The file is processed locally; only the shortlisted frames are sent to kie.ai.</div>
+          <div class="hint">Your video stays on the server. Only a few still frames get sent off to the AI.</div>
         </div>
 
         <div id="status">
-          Working — sampling frames, art-directing, and rendering. This usually takes 1-3 minutes...
+          Working on it. This takes a couple of minutes, so keep the tab open.
         </div>
       </form>
     </div>
 
     {% if error %}
     <div class="card error">
-      <b>Something went wrong:</b>
+      <b>That didn't work:</b>
       <div class="meta">{{ error }}</div>
     </div>
     {% endif %}
 
     {% if result %}
     <div class="card">
-      <img class="thumb-img" src="{{ result.image_url }}" alt="Generated thumbnail">
+      <img class="thumb-img" src="{{ result.image_url }}" alt="The thumbnail this made">
       <div>
-        <span class="pill">{{ 'rendered by ' + result.image_model if result.rendered else 'original frame' }}</span>
-        <span class="pill">directed by {{ result.chat_model }}</span>
-        <span class="pill">headline on the {{ result.text_side }}</span>
-        {% if result.transcribed %}<span class="pill">speech-aware headline</span>{% endif %}
-        <span class="pill">{{ 'uploaded file' if result.origin == 'upload' else 'youtube link' }}</span>
+        <span class="pill">{{ 'Redrawn with GPT Image 2' if result.rendered else 'Original frame' }}</span>
+        <span class="pill">Text on the {{ result.text_side }}</span>
+        {% if result.transcribed %}<span class="pill">Used what was said</span>{% endif %}
+        <span class="pill">{{ 'From your file' if result.origin == 'upload' else 'From a link' }}</span>
       </div>
       <div class="meta">
-        <div><b>Source:</b> {{ result.title }}</div>
+        <div><b>Video:</b> {{ result.title }}</div>
         <div><b>Headline:</b> "{{ result.headline }}"</div>
-        <div><b>Chosen frame:</b> t={{ result.timestamp }}s — {{ result.reason }}</div>
+        <div><b>Frame:</b> {{ result.timestamp }} seconds in. {{ result.reason }}</div>
       </div>
       {% for warning in result.warnings %}
       <div class="note">{{ warning }}</div>
       {% endfor %}
-      <a class="download" href="{{ result.image_url }}" download="thumbnail.jpg">Download thumbnail.jpg</a>
+      <a class="download" href="{{ result.image_url }}" download="thumbnail.jpg">Download it</a>
     </div>
     {% endif %}
   </div>
@@ -221,7 +220,7 @@
 
     function showFile(file) {
       if (!file) return;
-      fileLabel.textContent = "Ready to generate";
+      fileLabel.textContent = "Got it, ready when you are";
       fileName.textContent = file.name + " (" + (file.size / 1048576).toFixed(1) + " MB)";
     }
 
@@ -252,7 +251,7 @@
 
       document.querySelectorAll("button.go").forEach(function (b) {
         b.disabled = true;
-        b.textContent = "Working...";
+        b.textContent = "Working on it";
       });
       document.getElementById("status").style.display = "block";
     });

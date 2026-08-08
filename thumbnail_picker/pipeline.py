@@ -53,8 +53,8 @@ def generate_thumbnail(source: VideoSource, output_path: str, on_step=None) -> T
     shortlist = extract.get_shortlist(source.video_path, source.duration, frames_dir)
     if not shortlist:
         raise RuntimeError(
-            "No usable frames passed the sharpness and exposure filter for this video. "
-            "It may be very dark, very blurry, or almost entirely static."
+            "None of the frames were sharp or bright enough to use. The video might be very "
+            "dark, very blurry, or barely moving."
         )
 
     transcript_segments = []
@@ -62,7 +62,7 @@ def generate_thumbnail(source: VideoSource, output_path: str, on_step=None) -> T
         step("Transcribing audio for headline context...")
         transcript_segments = transcribe.transcribe(source.video_path)
         if not transcript_segments:
-            warnings.append("Transcription returned nothing — the headline is based on visuals alone.")
+            warnings.append("Couldn't make out any speech, so the headline is based on the picture alone.")
 
     step(f"Uploading {len(shortlist)} candidate frames to kie.ai...")
     frame_urls = _upload_shortlist(shortlist)
@@ -93,7 +93,7 @@ def generate_thumbnail(source: VideoSource, output_path: str, on_step=None) -> T
         grade_strength=0.25 if rendered else 1.0,
     )
     if not layout["face_detected"]:
-        warnings.append("No face found in the final image — the headline was placed on composition alone.")
+        warnings.append("No face in the final image, so the text was placed to suit the composition instead.")
 
     return ThumbnailResult(
         output_path=output_path,

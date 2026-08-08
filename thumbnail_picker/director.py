@@ -208,5 +208,5 @@ def direct(shortlist: list[Candidate], frame_urls: dict[str, str],
             ]
 
     raise kie.KieError(
-        f"The art-direction model did not return a usable plan after 2 attempts ({last_error})."
+        f"The model couldn't settle on a usable plan after two tries. ({last_error})"
     )

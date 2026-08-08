@@ -93,4 +93,4 @@ def render_or_fallback(frame_path: str, plan: ThumbnailPlan, dest_path: str,
     except kie.KieError as e:
         if not config.FALLBACK_TO_RAW_FRAME:
             raise
-        return frame_path, f"GPT Image 2 render unavailable, using the original frame instead — {e}"
+        return frame_path, f"Couldn't redraw this with GPT Image 2, so it's the original frame. {e}"

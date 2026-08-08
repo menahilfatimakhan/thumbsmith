@@ -32,7 +32,7 @@ DownloadResult = VideoSource
 
 def _too_long_error(duration: float) -> RuntimeError:
     return RuntimeError(
-        f"This video is about {duration / 3600:.1f} hours long — longer than the "
+        f"This video is about {duration / 3600:.1f} hours long, over the "
         f"{config.MAX_VIDEO_DURATION_SECONDS / 3600:.0f}-hour limit this tool supports. "
         "Long videos take a very long time to download and process (hours, not seconds). "
         "Try a shorter video, or raise MAX_VIDEO_DURATION_SECONDS in config.py if you really "

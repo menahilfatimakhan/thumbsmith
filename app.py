@@ -17,11 +17,22 @@ INCOMING_DIR = os.path.join(config.WORK_DIR, "_incoming")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
+def _readable_extensions() -> str:
+    """"MP4, MOV, MKV, WEBM, AVI or M4V" — the raw set reads like machine output on screen."""
+    common = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]
+    ordered = [e for e in common if e in config.ALLOWED_UPLOAD_EXTENSIONS]
+    ordered += sorted(config.ALLOWED_UPLOAD_EXTENSIONS - set(ordered))
+    names = [e.lstrip(".").upper() for e in ordered]
+    if len(names) < 2:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} or {names[-1]}"
+
+
 def _page(**kwargs):
     return render_template(
         "index.html",
         max_upload_mb=int(config.MAX_UPLOAD_BYTES / 1024 / 1024),
-        allowed_extensions=",".join(sorted(config.ALLOWED_UPLOAD_EXTENSIONS)),
+        allowed_extensions=_readable_extensions(),
         **kwargs,
     )
 
