@@ -29,10 +29,16 @@ def _readable_extensions() -> str:
 
 
 def _page(**kwargs):
+    blocked = download.youtube_is_blocked()
+    # Once YouTube has bot-blocked this host, every later link fails identically. Send
+    # people to the tab that works rather than letting them retry a dead path.
+    if blocked and "active_tab" not in kwargs:
+        kwargs["active_tab"] = "upload"
     return render_template(
         "index.html",
         max_upload_mb=int(config.MAX_UPLOAD_BYTES / 1024 / 1024),
         allowed_extensions=_readable_extensions(),
+        youtube_blocked=blocked,
         **kwargs,
     )
 

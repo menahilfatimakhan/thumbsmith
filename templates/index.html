@@ -127,6 +127,17 @@
       font-size: 0.9rem;
     }
     .hint { color: var(--muted); font-size: 0.82rem; margin-top: 10px; }
+    .blocked {
+      background: #2a2113;
+      border: 1px solid #6b5620;
+      color: #f3d9a4;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.87rem;
+      line-height: 1.55;
+      margin-bottom: 14px;
+    }
+    .blocked b { color: var(--warn); display: block; margin-bottom: 3px; }
   </style>
 </head>
 <body>
@@ -147,6 +158,14 @@
         </div>
 
         <div class="panel {{ '' if active_tab == 'upload' else 'active' }}" id="panel-link">
+          {% if youtube_blocked %}
+          <div class="blocked">
+            <b>Links don't work on this server.</b>
+            YouTube blocks downloads from datacentres, so it refuses this machine no matter
+            which video you paste. Download the video on your own computer and use the
+            Upload tab, which is unaffected.
+          </div>
+          {% endif %}
           <div class="row">
             <input type="url" name="youtube_url" placeholder="https://youtu.be/..."
                    value="{{ youtube_url or '' }}">

@@ -54,6 +54,16 @@ def _ydl_opts(**extra) -> dict:
     return opts
 
 
+# Set the first time YouTube bot-blocks this host. The block is a property of the server's
+# IP, not of one video, so once it happens every future link will fail the same way. The UI
+# reads this to stop presenting the link tab as though it works here.
+_youtube_blocked = False
+
+
+def youtube_is_blocked() -> bool:
+    return _youtube_blocked
+
+
 def _friendly_youtube_error(e: Exception) -> RuntimeError:
     """Turn yt-dlp's wall of text into one sentence and a next step.
 
@@ -63,6 +73,8 @@ def _friendly_youtube_error(e: Exception) -> RuntimeError:
     text = str(e)
 
     if "not a bot" in text or "Sign in to confirm" in text:
+        global _youtube_blocked
+        _youtube_blocked = True
         if config.YTDLP_COOKIES_FILE or config.YTDLP_PROXY:
             return RuntimeError(
                 "YouTube is refusing to serve this video to the server, even with the "
