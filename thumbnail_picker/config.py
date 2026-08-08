@@ -124,7 +124,8 @@ FALLBACK_TO_RAW_FRAME = True
 # every system font list falls back to) are what make a thumbnail read as amateur —
 # Impact in particular now signals "2010 meme" rather than "designed".
 #
-# Downloaded on first use like the face model, so nothing binary lives in the repo.
+# Committed to the repo (167 KB) so a deploy needs no network fetch to render type
+# correctly, and downloaded on first use if it is ever missing.
 FONT_PATH = "fonts/Anton-Regular.ttf"
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf"
 
