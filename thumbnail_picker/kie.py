@@ -222,14 +222,37 @@ def run_image_task(model: str, task_input: dict, on_progress=None) -> list[str]:
 
 
 def download(url: str, dest_path: str) -> str:
-    """Fetch a rendered image off kie.ai's CDN onto disk."""
-    try:
-        response = requests.get(url, timeout=config.KIE_REQUEST_TIMEOUT_SECONDS)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        raise KieError(f"Could not download the rendered thumbnail from kie.ai: {e}") from e
+    """Fetch a rendered image off kie.ai's CDN onto disk.
 
-    os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
-    with open(dest_path, "wb") as f:
-        f.write(response.content)
-    return dest_path
+    Retries hard, because by this point the render is already paid for and finished. A
+    single transient DNS hiccup on the CDN host used to throw the whole thing away and
+    silently fall back to the ungraded source frame, which is the most expensive possible
+    way to fail: full cost, worst output.
+    """
+    last_error: Exception | None = None
+
+    for attempt in range(1, config.KIE_DOWNLOAD_RETRIES + 1):
+        try:
+            response = requests.get(url, timeout=config.KIE_REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            last_error = e
+            if attempt < config.KIE_DOWNLOAD_RETRIES:
+                time.sleep(config.KIE_RETRY_BACKOFF_SECONDS * attempt)
+            continue
+
+        if not response.content:
+            last_error = KieError("the CDN returned an empty file")
+            if attempt < config.KIE_DOWNLOAD_RETRIES:
+                time.sleep(config.KIE_RETRY_BACKOFF_SECONDS * attempt)
+            continue
+
+        os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+        with open(dest_path, "wb") as f:
+            f.write(response.content)
+        return dest_path
+
+    raise KieError(
+        f"The thumbnail rendered, but it could not be downloaded after "
+        f"{config.KIE_DOWNLOAD_RETRIES} attempts: {last_error}"
+    )

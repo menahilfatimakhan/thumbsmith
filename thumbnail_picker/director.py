@@ -33,21 +33,43 @@ with a candidate_id, its timestamp, and sometimes the speech happening at that m
 Design the thumbnail.
 
 FRAME CHOICE — pick the one frame that will earn the click:
-- A large, clearly readable face with a strong, specific emotion beats everything else. \
-Shock, delight, disbelief, strain, focus. A neutral or mid-blink face is worthless.
-- If no face works, pick the most legible single moment of action, contrast, or result. \
-Reject anything blurry, dim, cluttered, or mid-motion.
-- Prefer a frame with room around the subject. A frame where the subject is dead centre \
-and edge-to-edge leaves nowhere for the headline.
-- On-screen numbers, results, or a visible before/after are a strong plus.
 
-HEADLINE — 2 to 4 words, {max_chars} characters maximum, ALL CAPS, no trailing punctuation:
-- Open a curiosity gap or make a concrete claim. "IT ALL BROKE", "$0 TO $40K", "NOBODY \
-EXPECTED THIS".
+The single most common failure is picking someone MID-SENTENCE. A half-open mouth caught \
+between syllables, lips parted around a consonant, tongue or teeth showing mid-word: this \
+looks accidental and cheap, like a paused video, and it destroys the thumbnail no matter \
+how good everything else is. Reject those frames outright.
+
+What you want instead is an expression that looks INTENTIONAL — a face that could plausibly \
+be holding that look for the camera:
+- Mouth closed, or fully and deliberately open in real surprise. Never halfway.
+- Eyes open and engaged, ideally toward the lens. No mid-blink, no half-lidded.
+- A clear, readable emotion: shock, delight, disbelief, smugness, concentration.
+- A calm, composed, confident look beats a badly-timed animated one. Still and deliberate \
+is better than energetic and accidental.
+
+Also reject: blurry or dim frames, motion smear, awkward hand positions frozen mid-gesture, \
+and frames where burnt-in subtitles or on-screen captions sit across the picture.
+
+Prefer a frame with room around the subject. Dead-centre and edge-to-edge leaves nowhere \
+for the headline. Genuine on-screen numbers or a visible result are a strong plus.
+
+HEADLINE — 2 to 4 words, {max_chars} characters maximum, no trailing punctuation:
+
+Write the words a real channel would use. The strongest headlines are one of:
+- A flat, confident claim, stated as fact: "I LIVE HERE", "NO LIMIT", "IT ALL BROKE".
+- A concrete outcome, ideally a number: "$57,152 A MONTH", "1 HOUR A DAY", "$0 TO $40K".
+- A pointed question the viewer wants answered: "REPLACE FULL TIME INCOME?"
+
+Rules:
 - Never describe the picture. "MAN AT DESK" is a caption; you are writing a hook.
-- If speech context is provided, anchor the headline in something actually said or shown. \
-Specific beats vague. Real numbers beat adjectives.
-- It must stay readable at thumbnail size, so short words win.
+- Never write generic advice-speak. "TIPS", "GUIDE", "HOW TO", "EXPLAINED", "NEEDED", \
+"THE TRUTH", "YOU NEED THIS" are all dead on arrival. They promise nothing specific.
+- Specific beats vague, always. A real number, name, place or amount beats any adjective. \
+If the video is about getting a job at Google, "I GOT INTO GOOGLE" beats "NO REFERRAL NEEDED", \
+because one is a result and the other is a technicality.
+- Say the interesting part out loud. Do not hint at it.
+- If speech context is provided, mine it for a concrete claim actually made.
+- Short words win, because this is read at 210 pixels wide.
 
 LAYOUT — subject_side is where the human or main subject should sit in the final image. \
 The headline goes on the opposite side, so never say "center" unless the subject genuinely \

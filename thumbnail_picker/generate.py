@@ -24,18 +24,36 @@ NEGATIVE_SPACE = {
 }
 
 BASE_DIRECTION = (
-    "Re-render this video still as a professional, high-CTR YouTube thumbnail in 16:9.\n\n"
-    "Keep it the same shot: the same person, the same face, the same clothing, the same "
-    "identity and expression. Do not replace the subject, do not restyle them into a "
-    "different person, do not turn this into an illustration or cartoon.\n\n"
-    "What to change:\n"
-    "- Grade it like a thumbnail: deep contrast, rich saturated colour, crisp detail, no haze.\n"
-    "- Light the subject so they separate hard from the background — soft key light on the "
-    "face, a subtle rim light along the edge, background pushed darker and blurred.\n"
-    "- Remove clutter, distracting objects, stray logos, and messy edges.\n"
-    "- Keep the subject large in frame. Their face must read clearly at 210x118 pixels.\n"
-    "- Keep skin tones natural. No plastic smoothing, no uncanny features, no extra fingers "
-    "or limbs.\n"
+    "Rebuild this video still as a thumbnail a professional YouTube designer would deliver, "
+    "in 16:9. The source is a raw frame from a camera; the output must look like a composed, "
+    "art-directed graphic, not a screenshot with a filter over it.\n\n"
+
+    "Keep the same person: same face, same bone structure, same skin tone, same hair, same "
+    "clothing, same identity. Do not swap them for someone else, beautify them into a "
+    "different face, or turn this into an illustration, 3D render or cartoon. It must still "
+    "obviously be this exact person.\n\n"
+
+    "Treat the subject as a cut-out placed onto a designed background:\n"
+    "- Separate them hard from the background, the way a studio portrait does. Crisp, clean "
+    "edges around hair and shoulders.\n"
+    "- Light them properly: a strong key light shaping the face, a rim light along one edge "
+    "to lift them off the background, and catchlights in the eyes.\n"
+    "- Replace the ordinary room behind them with a clean, deliberate backdrop: a rich "
+    "graduated colour, soft studio falloff, or a heavily blurred and darkened version of the "
+    "original setting. It must never compete with the face.\n"
+    "- Delete every trace of the original clutter: burnt-in subtitles and captions, "
+    "timestamps, watermarks, channel logos, furniture edges, cables, curtain folds, doorframes "
+    "and background people. Any leftover on-screen text is a failure.\n\n"
+
+    "Finish it like a thumbnail, not like a photo:\n"
+    "- Deep contrast and rich, saturated colour. Punchy, never muddy, never washed out.\n"
+    "- Crisp micro-detail on the eyes, mouth and hair.\n"
+    "- The face large and unmistakable at 210x118 pixels.\n"
+    "- Natural skin texture. No plastic smoothing, no waxy blur, no uncanny eyes, no warped "
+    "hands, no extra fingers or limbs.\n"
+    "- If the mouth is caught awkwardly between syllables, settle it into a natural, "
+    "deliberate expression that suits the face. It should look held for the camera, not "
+    "caught by accident.\n"
 )
 
 NO_TEXT_RULE = (

@@ -7,6 +7,7 @@ YouTube's own duration badge.
 """
 
 import os
+import urllib.request
 
 import cv2
 import numpy as np
@@ -25,8 +26,15 @@ Box = tuple[float, float, float, float]
 
 
 def _stroke_for(font_size: int) -> int:
-    """Outline thickness. Scales with the type so it stays proportional at any size."""
-    return max(3, font_size // 11)
+    """Outline thickness. A hairline for legibility, not the old Impact-meme keyline."""
+    return max(1, round(font_size * config.STROKE_RATIO))
+
+
+def _readable_on(hex_color: str) -> str:
+    """Black or white, whichever stays readable on top of the given fill."""
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    # Rec. 601 luma: matches how the eye weights the channels closely enough for this.
+    return "black" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "white"
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +192,21 @@ def _zone_business(img: Image.Image, zone: Box) -> tuple[float, float]:
 # Type
 # ---------------------------------------------------------------------------
 
+def _ensure_display_font() -> None:
+    """Download Anton on first use, the same way the face model is fetched."""
+    if os.path.exists(config.FONT_PATH):
+        return
+    try:
+        os.makedirs(os.path.dirname(config.FONT_PATH), exist_ok=True)
+        urllib.request.urlretrieve(config.FONT_URL, config.FONT_PATH)
+    except Exception:
+        # Not fatal: FONT_CANDIDATES still has system fonts to fall back on. The result
+        # looks dated rather than broken.
+        pass
+
+
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    _ensure_display_font()
     for path in config.FONT_CANDIDATES:
         if path and os.path.exists(path):
             try:
@@ -226,7 +248,11 @@ def _fit(draw: ImageDraw.ImageDraw, text: str, zone: Box, max_lines: int,
         # exactly the edge YouTube crops on some surfaces.
         usable_w = zone_w - 2 * _stroke_for(size)
         lines = _wrap(draw, text, font, usable_w)
-        line_height = int(size * 1.06)
+        # Derive leading from the font's own metrics, not from the nominal point size.
+        # A display face like Anton has cap heights that nearly fill the em, so a flat
+        # fraction of `size` set the lines overlapping.
+        ascent, descent = font.getmetrics()
+        line_height = int((ascent + descent) * config.LINE_HEIGHT_RATIO)
         widest = max((draw.textlength(line, font=font) for line in lines), default=0)
 
         if len(lines) <= max_lines and widest <= usable_w and line_height * len(lines) <= zone_h:
@@ -239,20 +265,46 @@ def _fit(draw: ImageDraw.ImageDraw, text: str, zone: Box, max_lines: int,
         return fallback
     font = _load_font(min_size)
     usable_w = zone_w - 2 * _stroke_for(min_size)
-    return font, _wrap(draw, text, font, usable_w)[:max_lines], int(min_size * 1.06)
+    ascent, descent = font.getmetrics()
+    return (font, _wrap(draw, text, font, usable_w)[:max_lines],
+            int((ascent + descent) * config.LINE_HEIGHT_RATIO))
 
 
 def _draw_line(draw: ImageDraw.ImageDraw, xy: tuple[float, float], line: str,
                font: ImageFont.FreeTypeFont, accent_word: str, accent_color: str,
-               stroke_width: int) -> None:
-    """Draw one line word by word so the accent word can take a different colour."""
+               stroke_width: int, line_height: int) -> None:
+    """Draw one line word by word, so the accent word can be blocked or recoloured."""
     x, y = xy
     space = draw.textlength(" ", font=font)
+
     for word in line.split():
-        fill = accent_color if accent_word and word == accent_word else "white"
-        draw.text((x, y), word, font=font, fill=fill,
-                  stroke_width=stroke_width, stroke_fill="black")
-        x += draw.textlength(word, font=font) + space
+        width = draw.textlength(word, font=font)
+        is_accent = bool(accent_word) and word == accent_word
+
+        if is_accent and config.ACCENT_AS_BLOCK:
+            # A filled slab behind the word, as in the reference thumbnails, rather than
+            # just tinting the glyphs.
+            #
+            # The slab is measured off the word's real drawn bounding box, not off the line
+            # box. Deriving it from font size and line height put the block low and let it
+            # collide with the line above, because a display face like Anton fills its em
+            # very differently from a text face.
+            left, top_, right, bottom = draw.textbbox((x, y), word, font=font)
+            pad_x, pad_y = font.size * 0.14, font.size * 0.09
+            draw.rounded_rectangle(
+                (left - pad_x, top_ - pad_y, right + pad_x, bottom + pad_y),
+                radius=font.size * 0.10,
+                fill=accent_color,
+            )
+            draw.text((x, y), word, font=font, fill=_readable_on(accent_color))
+        elif is_accent:
+            draw.text((x, y), word, font=font, fill=accent_color,
+                      stroke_width=stroke_width, stroke_fill="black")
+        else:
+            draw.text((x, y), word, font=font, fill="white",
+                      stroke_width=stroke_width, stroke_fill="black")
+
+        x += width + space
 
 
 def _block_top(zone: Box, block_height: float, face_box: Box | None) -> float:
@@ -308,22 +360,25 @@ def _draw_headline(img: Image.Image, headline: str, accent_word: str, accent_col
             return zone[2] - width - stroke_width
         return zone[0] + (zone[2] - zone[0] - width) / 2
 
-    # Soft drop shadow first, on its own layer, so the type lifts off the picture.
+    # The shadow now carries the separation that the heavy outline used to. It sits on its
+    # own layer and is blurred generously, so the type lifts off the picture without a
+    # hard keyline around every glyph.
     shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
-    offset = max(2, font.size // 18)
+    offset = max(2, round(font.size * config.SHADOW_OFFSET_RATIO))
     for i, line in enumerate(lines):
         shadow_draw.text(
             (line_x(line) + offset, top + i * line_height + offset), line,
-            font=font, fill=(0, 0, 0, 190), stroke_width=stroke_width, stroke_fill=(0, 0, 0, 190),
+            font=font, fill=(0, 0, 0, config.SHADOW_ALPHA),
+            stroke_width=stroke_width, stroke_fill=(0, 0, 0, config.SHADOW_ALPHA),
         )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(max(3, font.size // 12)))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(max(3, round(font.size * config.SHADOW_BLUR_RATIO))))
     img.paste(Image.alpha_composite(img.convert("RGBA"), shadow).convert("RGB"))
 
     draw = ImageDraw.Draw(img)
     for i, line in enumerate(lines):
         _draw_line(draw, (line_x(line), top + i * line_height), line,
-                   font, accent_word, accent_color, stroke_width)
+                   font, accent_word, accent_color, stroke_width, line_height)
 
 
 # ---------------------------------------------------------------------------

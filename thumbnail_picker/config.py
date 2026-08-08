@@ -95,6 +95,11 @@ KIE_POLL_TIMEOUT_SECONDS = 420
 KIE_MAX_RETRIES = 3
 KIE_RETRY_BACKOFF_SECONDS = 3
 
+# Downloading the finished render gets more attempts than anything else: the image is
+# already rendered and already paid for, so giving up here means paying full price for the
+# worst possible output (the ungraded source frame).
+KIE_DOWNLOAD_RETRIES = 5
+
 # Frames are downscaled before upload — the director only needs enough pixels to judge
 # expression and composition, and 8 full-size stills is a lot of wasted bandwidth.
 DIRECTOR_IMAGE_MAX_WIDTH = 800
@@ -114,9 +119,20 @@ FALLBACK_TO_RAW_FRAME = True
 # ---------------------------------------------------------------------------
 # Typography / layout
 # ---------------------------------------------------------------------------
-# First font that exists on the box wins. Override with THUMBNAIL_FONT_PATH.
+# Anton is the typeface this is designed around: heavy, condensed, geometric, and the de
+# facto look of high-CTR thumbnails. Arial Black and Impact (the old defaults, and what
+# every system font list falls back to) are what make a thumbnail read as amateur —
+# Impact in particular now signals "2010 meme" rather than "designed".
+#
+# Downloaded on first use like the face model, so nothing binary lives in the repo.
+FONT_PATH = "fonts/Anton-Regular.ttf"
+FONT_URL = "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf"
+
+# Only reached if Anton cannot be downloaded. Override the whole thing with
+# THUMBNAIL_FONT_PATH to use a brand typeface instead.
 FONT_CANDIDATES = [
     os.environ.get("THUMBNAIL_FONT_PATH", ""),
+    FONT_PATH,
     # Windows
     r"C:\Windows\Fonts\ariblk.ttf",      # Arial Black
     r"C:\Windows\Fonts\impact.ttf",
@@ -130,6 +146,30 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
 ]
+
+# Reference thumbnails set their lines almost touching. 1.06 leaves the airy, default-ish
+# gap that reads as "text placed by software" rather than "type set by a designer".
+# Applied to the font's ascent+descent, not to its point size.
+LINE_HEIGHT_RATIO = 0.86
+
+# Paint a filled block behind the accent word instead of just recolouring it. This is the
+# single strongest "a designer made this" cue in the reference set.
+ACCENT_AS_BLOCK = True
+
+# Outline thickness as a fraction of the font size.
+#
+# The old value was 1/11, a heavy black keyline. That single choice is most of what made
+# output read as amateur: it is the Impact-meme look, and none of the modern reference
+# thumbnails use it. The better ones carry no outline whatsoever and separate the type
+# from the picture with negative space and a soft shadow instead. A hairline is kept so
+# text stays legible if the render hands back a busier background than expected.
+STROKE_RATIO = 1 / 26
+
+# Drop shadow does the work the outline used to. Offset and blur are both relative to the
+# font size so the treatment holds at any headline length.
+SHADOW_OFFSET_RATIO = 1 / 22
+SHADOW_BLUR_RATIO = 1 / 9
+SHADOW_ALPHA = 165
 
 # YouTube stamps the duration badge over the bottom-right corner of every thumbnail, and
 # crops the edges on some surfaces. Keep type out of these fractions of the frame.
