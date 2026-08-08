@@ -16,15 +16,20 @@ echo "==> Ensuring swap exists"
 # Lightsail's small instances ship with ~1 GB of RAM and no swap. Decoding frames into
 # numpy arrays spikes well past that, and with no swap the kernel OOM-kills gunicorn
 # mid-render — which looks like a random 502 rather than a memory problem.
-if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
-    sudo fallocate -l 2G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile >/dev/null
-    sudo swapon /swapfile
+# Read /proc/swaps rather than calling swapon: the swap tools live in /usr/sbin, which is
+# not on a non-root PATH on Debian, so `swapon --show` fails with "command not found" and
+# the check silently decides there is no swap.
+if [ "$(awk 'NR > 1' /proc/swaps | wc -l)" -eq 0 ]; then
+    if [ ! -e /swapfile ]; then
+        sudo fallocate -l 2G /swapfile
+        sudo chmod 600 /swapfile
+        sudo /usr/sbin/mkswap /swapfile >/dev/null
+    fi
+    sudo /usr/sbin/swapon /swapfile
     grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
-    echo "    created a 2G swapfile"
+    echo "    swap enabled"
 else
-    echo "    swap already present"
+    echo "    swap already active: $(awk 'NR > 1 {printf "%s (%s KB)", $1, $3}' /proc/swaps)"
 fi
 
 echo "==> Installing system packages"
