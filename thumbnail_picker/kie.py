@@ -62,6 +62,24 @@ def _explain_http_error(response: requests.Response, what: str) -> KieError:
     return KieError(f"kie.ai returned {code} while {what}: {message}")
 
 
+def _explain_body_error(code: int, body: dict, what: str) -> KieError:
+    """Same translation as _explain_http_error, for failures reported inside a 200 body."""
+    message = body.get("msg") or body.get("message") or "no detail given"
+
+    if code == 401:
+        return KieError(f"kie.ai rejected the API key while {what}. Check {config.KIE_API_KEY_ENV}.")
+    if code == 402:
+        return KieError(
+            f"The kie.ai account has run out of credits, so it stopped while {what}. "
+            "Top up at https://kie.ai/billing and try again."
+        )
+    if code == 429:
+        return KieError(f"kie.ai is rate limiting us while {what}. Give it a few seconds and try again.")
+    if code >= 500:
+        return KieError(f"kie.ai had a server error while {what}: {message}")
+    return KieError(f"kie.ai refused the request while {what} (code {code}): {message}")
+
+
 def _post(url: str, payload: dict, what: str) -> dict:
     """POST with retries on transport errors and 5xx — those are transient, 4xx are not."""
     last_error: Exception | None = None
@@ -88,10 +106,34 @@ def _post(url: str, payload: dict, what: str) -> dict:
             raise _explain_http_error(response, what)
 
         try:
-            return response.json()
+            body = response.json()
         except ValueError as e:
             raise KieError(f"kie.ai returned a non-JSON response while {what}.") from e
 
+        # kie.ai signals failures in the body while still answering HTTP 200 — a transient
+        # outage arrives as {"code": 500, "msg": "Server exception"} with a 200 status. The
+        # HTTP-status checks above cannot see that, so it used to sail through as success
+        # and fail confusingly further down ("returned no choices"), with no retry, on an
+        # error that a retry usually fixes.
+        #
+        # The chat endpoint omits `code` entirely when it succeeds, so only an explicit
+        # non-200 counts as a failure here.
+        code = body.get("code") if isinstance(body, dict) else None
+        if isinstance(code, int) and code != 200:
+            error = _explain_body_error(code, body, what)
+            if code >= 500:
+                last_error = error
+                if attempt < config.KIE_MAX_RETRIES:
+                    time.sleep(config.KIE_RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            raise error
+
+        return body
+
+    # An already-translated KieError says everything useful; wrapping it again just nests
+    # the same sentence twice. Only raw transport errors need the extra context.
+    if isinstance(last_error, KieError):
+        raise KieError(f"{last_error} Tried {config.KIE_MAX_RETRIES} times.")
     raise KieError(f"kie.ai is unreachable after {config.KIE_MAX_RETRIES} attempts while {what}: {last_error}")
 
 

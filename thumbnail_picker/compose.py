@@ -22,6 +22,11 @@ MAX_LINES_BAND = 2
 # usable — roughly two lines at the minimum font size.
 MIN_CLEARANCE_FRACTION = 0.17
 
+# A wrapped headline's narrowest line must be at least this fraction of its widest, or the
+# setting is treated as unbalanced and a smaller size is tried. Guards against runt lines
+# like a lone "7" sitting above "COURSES 1".
+MIN_LINE_BALANCE = 0.55
+
 Box = tuple[float, float, float, float]
 
 
@@ -219,10 +224,11 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: float) -> list[str]:
+def _greedy_wrap(draw: ImageDraw.ImageDraw, words: list[str], font: ImageFont.FreeTypeFont,
+                 max_width: float) -> list[str]:
     lines: list[str] = []
     current: list[str] = []
-    for word in text.split():
+    for word in words:
         trial = " ".join(current + [word])
         if draw.textlength(trial, font=font) <= max_width or not current:
             current.append(word)
@@ -231,6 +237,62 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, ma
             current = [word]
     if current:
         lines.append(" ".join(current))
+    return lines
+
+
+def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: float) -> list[str]:
+    """Break the headline into balanced lines rather than greedily filling each one.
+
+    Greedy filling packs the first line and leaves whatever will not fit, which strands
+    short words on lines of their own: "7 COURSES 1 WEEKEND" came out as "7 / COURSES 1 /
+    WEEKEND", splitting both numbers from the nouns they belong to. Balancing the line
+    widths instead gives "7 COURSES / 1 WEEKEND", which is how a person would set it.
+
+    Uses the same line count greedy would need, then picks the arrangement whose lines are
+    closest to equal width (minimum sum of squared slack, solved exactly by DP over the
+    small number of words a headline has).
+    """
+    words = text.split()
+    if not words:
+        return []
+
+    target_lines = len(_greedy_wrap(draw, words, font, max_width))
+    if target_lines <= 1:
+        return [" ".join(words)]
+
+    widths = [draw.textlength(w, font=font) for w in words]
+    space = draw.textlength(" ", font=font)
+
+    def line_width(i: int, j: int) -> float:
+        """Width of words[i:j] set on one line."""
+        return sum(widths[i:j]) + space * (j - i - 1)
+
+    n = len(words)
+    INF = float("inf")
+    # best[i][k] = minimum cost of setting words[i:] on exactly k lines.
+    best = [[INF] * (target_lines + 1) for _ in range(n + 1)]
+    split = [[0] * (target_lines + 1) for _ in range(n + 1)]
+    best[n][0] = 0.0
+
+    for i in range(n - 1, -1, -1):
+        for k in range(1, target_lines + 1):
+            for j in range(i + 1, n + 1):
+                width = line_width(i, j)
+                if width > max_width and j > i + 1:
+                    break  # any longer line only overflows further
+                slack = max(0.0, max_width - width)
+                cost = slack * slack + best[j][k - 1]
+                if cost < best[i][k]:
+                    best[i][k], split[i][k] = cost, j
+
+    if best[0][target_lines] == INF:
+        return _greedy_wrap(draw, words, font, max_width)
+
+    lines, i, k = [], 0, target_lines
+    while k > 0:
+        j = split[i][k]
+        lines.append(" ".join(words[i:j]))
+        i, k = j, k - 1
     return lines
 
 
@@ -255,9 +317,19 @@ def _fit(draw: ImageDraw.ImageDraw, text: str, zone: Box, max_lines: int,
         line_height = int((ascent + descent) * config.LINE_HEIGHT_RATIO)
         widest = max((draw.textlength(line, font=font) for line in lines), default=0)
 
-        if len(lines) <= max_lines and widest <= usable_w and line_height * len(lines) <= zone_h:
+        fits = len(lines) <= max_lines and widest <= usable_w and line_height * len(lines) <= zone_h
+
+        # Fitting is not enough: the biggest font that merely *fits* is often an ugly
+        # setting. "7 COURSES 1 WEEKEND" fits in three lines as "7 / COURSES 1 / WEEKEND",
+        # stranding the 7, when one size down it sets as two even lines. Reject layouts
+        # with a runt line so the search keeps going and finds that.
+        narrowest = min((draw.textlength(line, font=font) for line in lines), default=0)
+        balanced = len(lines) <= 1 or (widest > 0 and narrowest / widest >= MIN_LINE_BALANCE)
+
+        if fits and balanced:
             return font, lines, line_height
-        if fallback is None and len(lines) <= max_lines:
+        # Remember the first merely-fitting layout, in case nothing balanced ever turns up.
+        if fallback is None and fits:
             fallback = (font, lines, line_height)
         size -= 4
 
